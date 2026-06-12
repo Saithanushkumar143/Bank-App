@@ -13,8 +13,10 @@ import {
   HelpCircle,
   Clock,
   Sparkles,
-  Award
+  Award,
+  X
 } from 'lucide-react';
+import { useEffect } from 'react';
 
 interface RoadmapModuleProps {
   setActiveTab: (tab: string) => void;
@@ -30,6 +32,61 @@ export default function RoadmapModule({ setActiveTab }: RoadmapModuleProps) {
   } = useAppStore();
   const [activeSubject, setActiveSubject] = useState<'Quantitative Aptitude' | 'Reasoning' | 'English' | 'General Awareness' | 'Computer Awareness'>('Quantitative Aptitude');
   const [expandedTopicId, setExpandedTopicId] = useState<string | null>(null);
+
+  // Study Timer States
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerActive, setTimerActive] = useState(false);
+  const [timerTopicId, setTimerTopicId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (timerActive && timerTopicId) {
+      interval = setInterval(() => {
+        setTimerSeconds(s => s + 1);
+      }, 1000);
+    } else {
+      if (interval) clearInterval(interval);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [timerActive, timerTopicId]);
+
+  const formatTime = (totalSecs: number) => {
+    const hrs = Math.floor(totalSecs / 3600);
+    const mins = Math.floor((totalSecs % 3600) / 60);
+    const secs = totalSecs % 60;
+    return `${hrs > 0 ? String(hrs).padStart(2, '0') + ':' : ''}${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
+  const handleStartTimer = (topicId: string) => {
+    if (timerTopicId && timerTopicId !== topicId && timerSeconds > 0) {
+      if (!confirm("Starting a study study timer here will discard your active unsaved timer on the other topic. Proceed?")) {
+        return;
+      }
+    }
+    setTimerTopicId(topicId);
+    setTimerSeconds(0);
+    setTimerActive(true);
+  };
+
+  const handleLogSession = async (topicId: string) => {
+    const minutesToLog = Math.max(1, Math.round(timerSeconds / 60));
+    setTimerActive(false);
+    
+    const logStudyTime = useAppStore.getState().logStudyTime;
+    await logStudyTime(topicId, minutesToLog);
+
+    setTimerTopicId(null);
+    setTimerSeconds(0);
+    alert(`Logged ${minutesToLog} minutes of study time for this topic!`);
+  };
+
+  const handleResetTimer = () => {
+    setTimerTopicId(null);
+    setTimerSeconds(0);
+    setTimerActive(false);
+  };
 
   const email = currentUser?.email || '';
   const profile = userProfiles[email] || { roadmapProgress: {}, unlockedLevels: { 'Full-Length': 1 } };
@@ -204,6 +261,55 @@ export default function RoadmapModule({ setActiveTab }: RoadmapModuleProps) {
                             </a>
                           ))}
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Study Session Timer */}
+                    <div className="bg-slate-100/50 dark:bg-slate-900/40 p-4.5 rounded-2xl border border-slate-200/40 dark:border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-2">
+                      <div className="flex items-center gap-3">
+                        <div className="h-9 w-9 rounded-xl bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                          <Clock className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <h6 className="font-bold text-slate-800 dark:text-slate-200 text-xs">Study Session Timer</h6>
+                          <p className="text-[10px] text-slate-400 font-medium">Total time logged: <span className="font-bold text-slate-600 dark:text-slate-350">{profile.roadmapTimeSpent?.[topic.id] || 0} minutes</span></p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {timerTopicId === topic.id ? (
+                          <div className="flex items-center gap-3">
+                            <span className="font-black text-xs text-blue-600 dark:text-blue-400 font-mono">
+                              {formatTime(timerSeconds)}
+                            </span>
+                            <button
+                              onClick={() => setTimerActive(!timerActive)}
+                              className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-white rounded-lg font-bold transition cursor-pointer text-[10px]"
+                            >
+                              {timerActive ? 'Pause' : 'Resume'}
+                            </button>
+                            <button
+                              onClick={() => handleLogSession(topic.id)}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold transition cursor-pointer shadow-sm shadow-blue-500/10 text-[10px]"
+                            >
+                              Log {Math.max(1, Math.round(timerSeconds / 60))} Min
+                            </button>
+                            <button
+                              onClick={handleResetTimer}
+                              className="p-1.5 text-slate-400 hover:text-slate-500 cursor-pointer"
+                              title="Cancel Timer"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => handleStartTimer(topic.id)}
+                            className="px-4 py-2 bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-205 border border-slate-200 dark:border-slate-700 rounded-xl font-bold flex items-center gap-1.5 transition cursor-pointer text-[10px]"
+                          >
+                            <Play className="h-3.5 w-3.5 text-blue-600" /> Start Studying
+                          </button>
+                        )}
                       </div>
                     </div>
 

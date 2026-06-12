@@ -16,7 +16,8 @@ import {
   Sparkles,
   Sun,
   Moon,
-  X
+  X,
+  Brain
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 
@@ -47,6 +48,7 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: Si
     { name: 'Study Materials', label: 'Study Materials', icon: BookMarked },
     { name: 'Study Roadmap', label: 'Study Roadmap', icon: Compass },
     { name: 'Mock Tests', label: 'Mock Tests', icon: Award },
+    { name: 'Spaced Repetition', label: 'Review Queue', icon: Brain },
     { name: 'Analytics', label: 'Analytics', icon: BarChart3 },
     { name: 'Bookmarks', label: 'Bookmarks', icon: Bookmark },
     { name: 'Profile', label: 'Profile', icon: User },

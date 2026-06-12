@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useAppStore, PREDEFINED_ACCOUNTS } from '@/lib/store';
+import { useAppStore } from '@/lib/store';
+import { useSession } from 'next-auth/react';
 import Sidebar from '@/components/sidebar';
 import DashboardHome from '@/components/dashboard-home';
 import NotificationsModule from '@/components/notifications-module';
@@ -15,19 +16,36 @@ import MockTestsModule from '@/components/mock-tests-module';
 import AnalyticsModule from '@/components/analytics-module';
 import BookmarksModule from '@/components/bookmarks-module';
 import ProfileModule from '@/components/profile-module';
-import { Sparkles, Mail, Lock, ShieldAlert, Menu, Bell, Clock } from 'lucide-react';
+import SpacedRepetitionModule from '@/components/spaced-repetition-module';
+import DoubtSolver from '@/components/doubt-solver';
+import CustomToast from '@/components/custom-toast';
+import { Sparkles, Menu, Bell, Clock, Loader2 } from 'lucide-react';
 
 export default function RootPage() {
-  const { currentUser, login, userProfiles, syncData, notifications } = useAppStore();
+  const { data: session, status } = useSession();
+  const { currentUser, setCurrentUser, userProfiles, syncData, notifications } = useAppStore();
   const [activeTab, setActiveTab] = useState('Home');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [showMobileBellDropdown, setShowMobileBellDropdown] = useState(false);
   const [mounted, setMounted] = useState(false);
-  
-  // Login form state
-  const [emailInput, setEmailInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+
+  // Sync NextAuth session user with Zustand store
+  useEffect(() => {
+    if (session?.user) {
+      const sessUser = session.user as any;
+      if (!currentUser || currentUser.email !== sessUser.email) {
+        setCurrentUser({
+          id: sessUser.id || '',
+          email: sessUser.email || '',
+          name: sessUser.name || '',
+          role: sessUser.role || 'student',
+          supabaseAccessToken: sessUser.supabaseAccessToken || '',
+        });
+      }
+    } else if (status === 'unauthenticated') {
+      setCurrentUser(null);
+    }
+  }, [session, status, currentUser, setCurrentUser]);
 
   // Sync active theme class list with document.documentElement
   const profile = currentUser ? userProfiles[currentUser.email] : null;
@@ -81,109 +99,20 @@ export default function RootPage() {
     return () => clearTimeout(timer);
   }, []);
 
-  const handleLoginSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-
-    const targetEmail = emailInput.trim().toLowerCase();
-    
-    // Check if predefined account
-    const isPredefined = PREDEFINED_ACCOUNTS.some(
-      acc => acc.email.toLowerCase() === targetEmail
+  // If not mounted or session loading, render loading spinner
+  if (!mounted || status === 'loading' || (status === 'authenticated' && !currentUser)) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 text-blue-600 animate-spin" />
+      </div>
     );
-
-    if (!isPredefined) {
-      setErrorMsg('This is not one of the pre-authorized examiner accounts.');
-      return;
-    }
-
-    // Verify password against environment variables
-    const p1 = process.env.NEXT_PUBLIC_USER_1_PASSWORD || 'bankpass123';
-    const p2 = process.env.NEXT_PUBLIC_USER_2_PASSWORD || 'vyshnavi123';
-    const expectedPassword = targetEmail === PREDEFINED_ACCOUNTS[0].email.toLowerCase() ? p1 : p2;
-
-    if (passwordInput !== expectedPassword) {
-      setErrorMsg('Invalid password credentials.');
-      return;
-    }
-
-    // Perform Zustand login
-    const success = login(targetEmail);
-    if (!success) {
-      setErrorMsg('Error authenticating session.');
-    }
-  };
-
-  // If not mounted, render an empty screen to prevent hydration mismatch
-  if (!mounted) {
-    return <div className="min-h-screen bg-slate-50 dark:bg-slate-950" />;
   }
 
-  // If user is not logged in, render the login card screen
-  if (!currentUser) {
+  // If user is not logged in, they will be redirected by middleware, but render fallback just in case
+  if (status === 'unauthenticated') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 flex items-center justify-center p-6 font-sans">
-        <div className="w-full max-w-md bg-white dark:bg-slate-800 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-xl overflow-hidden p-8 space-y-6">
-          
-          {/* Header Banner */}
-          <div className="text-center space-y-2">
-            <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 mx-auto">
-              <Sparkles className="h-6 w-6" />
-            </div>
-            <h2 className="text-xl font-bold text-slate-850 dark:text-white">Banking Exam Companion</h2>
-            <p className="text-xs text-slate-400">Predefined Aspirant Credentials Portal</p>
-          </div>
-
-
-
-          {/* Regular Login Form */}
-          <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs font-semibold">
-            {errorMsg && (
-              <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 rounded-xl flex items-start gap-2 text-[10px]">
-                <ShieldAlert className="h-4 w-4 flex-shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            <div className="space-y-1">
-              <label className="block text-slate-400">Email Address</label>
-              <div className="relative">
-                <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-[16px] w-[16px] text-slate-400" />
-                <input
-                  type="email"
-                  required
-                  placeholder="name@gmail.com"
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  className="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <label className="block text-slate-400">Secure Password</label>
-              <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-[16px] w-[16px] text-slate-400" />
-                <input
-                  type="password"
-                  required
-                  placeholder="••••••••"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  className="w-full pl-11 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold flex items-center justify-center gap-1 transition shadow-lg shadow-blue-500/20 cursor-pointer text-xs"
-            >
-              Sign In to Companion
-            </button>
-          </form>
-
-        </div>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
+        <p className="text-slate-500 text-sm">Redirecting to login...</p>
       </div>
     );
   }
@@ -314,10 +243,17 @@ export default function RootPage() {
         {activeTab === 'Study Materials' && <StudyMaterialsModule />}
         {activeTab === 'Study Roadmap' && <RoadmapModule setActiveTab={setActiveTab} />}
         {activeTab === 'Mock Tests' && <MockTestsModule />}
+        {activeTab === 'Spaced Repetition' && <SpacedRepetitionModule />}
         {activeTab === 'Analytics' && <AnalyticsModule />}
         {activeTab === 'Bookmarks' && <BookmarksModule />}
         {activeTab === 'Profile' && <ProfileModule />}
       </main>
+
+      {/* Floating Doubt Solver Chatbot */}
+      <DoubtSolver />
+
+      {/* Global Custom Toast System */}
+      <CustomToast />
     </div>
   );
 }

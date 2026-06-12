@@ -1,5 +1,21 @@
 import { create } from 'zustand';
-import { supabase, isSupabaseConfigured } from './supabase';
+import { createClient } from '@supabase/supabase-js';
+import { signOut as nextAuthSignOut } from 'next-auth/react';
+import { env } from './env';
+
+const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+const getClientSupabase = (token?: string) => {
+  if (token) {
+    return createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    });
+  }
+  return createClient(supabaseUrl, supabaseAnonKey);
+};
 
 export interface Handnote {
   id: string;
@@ -9,12 +25,6 @@ export interface Handnote {
   topic: string;
   subject: string;
 }
-
-// Predefined accounts
-export const PREDEFINED_ACCOUNTS = [
-  { email: 'yegotisaithanushkumar143@gmail.com', name: 'Thanush' },
-  { email: 'vyshnavirayapudi86@gmail.com', name: 'Vyshnavi Rayapudi' }
-];
 
 export interface ExamNotification {
   id: string;
@@ -58,6 +68,7 @@ export interface CurrentAffairsArticle {
   summary: string;
   publishedAt: string;
   sourceUrl: string;
+  isVerified?: boolean;
 }
 
 export interface RoadmapTopic {
@@ -69,7 +80,7 @@ export interface RoadmapTopic {
   recommendedBooks: string[];
   videoLinks: { title: string; url: string }[];
   completionStatus: 'Locked' | 'Learning' | 'Practicing' | 'Completed';
-  level: number; // For level game
+  level: number;
 }
 
 export interface UserPreferences {
@@ -90,9 +101,10 @@ export interface Reminder {
 export interface MockTestHistory {
   testId: string;
   title: string;
-  type: 'Full-Length' | 'Subject' | 'Topic';
+  type: 'Full-Length' | 'Subject' | 'Topic' | 'Custom';
   subject?: string;
   topic?: string;
+  level?: number;
   scorePct: number;
   correctAnswers: number;
   wrongAnswers: number;
@@ -150,8 +162,9 @@ export interface UserProfileState {
     roadmapTopics: string[]; // ids
   };
   roadmapProgress: Record<string, 'Locked' | 'Learning' | 'Practicing' | 'Completed'>;
+  roadmapTimeSpent?: Record<string, number>;
   unlockedLevels: {
-    'Full-Length': number; // unlocked level (e.g. 1, 2, 3...)
+    'Full-Length': number;
     'Quantitative Aptitude': number;
     'Reasoning': number;
     'English': number;
@@ -164,10 +177,20 @@ export interface UserProfileState {
   likedFormulas: Handnote[];
 }
 
+export interface SessionUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  supabaseAccessToken?: string;
+}
+
 interface AppState {
-  // Authentication
-  currentUser: { email: string; name: string } | null;
-  userProfiles: Record<string, UserProfileState>; // Keyed by email
+  // Authentication & Session
+  currentUser: SessionUser | null;
+  setCurrentUser: (user: SessionUser | null) => Promise<void>;
+  fetchUserData: () => Promise<void>;
+  userProfiles: Record<string, UserProfileState>;
   
   // Database tables (Global Shared Data)
   notifications: ExamNotification[];
@@ -186,24 +209,30 @@ interface AppState {
   // Actions
   login: (email: string) => boolean;
   logout: () => void;
-  updateUserPreferences: (prefs: Partial<UserPreferences>) => void;
+  updateUserPreferences: (prefs: Partial<UserPreferences>) => Promise<void>;
   toggleTheme: () => void;
   
   // Dynamic bookmarks
-  toggleBookmark: (type: 'notifications' | 'jobs' | 'currentAffairs' | 'roadmapTopics', id: string) => void;
+  toggleBookmark: (type: 'notifications' | 'jobs' | 'currentAffairs' | 'roadmapTopics', id: string) => Promise<void>;
   
   // Roadmap update
-  updateRoadmapTopicStatus: (topicId: string, status: 'Locked' | 'Learning' | 'Practicing' | 'Completed') => void;
+  updateRoadmapTopicStatus: (topicId: string, status: 'Locked' | 'Learning' | 'Practicing' | 'Completed') => Promise<void>;
+  logStudyTime: (topicId: string, minutes: number) => Promise<void>;
   
   // Mock Test result submission (Level game logic)
-  submitMockTestResult: (result: Omit<MockTestHistory, 'completedAt'>) => void;
+  submitMockTestResult: (result: Omit<MockTestHistory, 'completedAt'>) => Promise<void>;
   
   // Scraper Actions
   syncData: () => Promise<void>;
-  addReminder: (reminder: Omit<Reminder, 'id' | 'triggered'>) => void;
-  removeReminder: (id: string) => void;
-  clearUserProfileData: (email: string) => void;
-  toggleLikeFormula: (formula: Handnote) => void;
+  addReminder: (reminder: Omit<Reminder, 'id' | 'triggered'>) => Promise<void>;
+  removeReminder: (id: string) => Promise<void>;
+  clearUserProfileData: (email: string) => Promise<void>;
+  toggleLikeFormula: (formula: Handnote) => Promise<void>;
+
+  // Toast notifications
+  toast: { message: string; type: 'success' | 'error' | 'info' } | null;
+  showToast: (message: string, type?: 'success' | 'error' | 'info') => void;
+  clearToast: () => void;
 }
 
 // Initial state helpers
@@ -223,6 +252,7 @@ const getInitialProfile = (email: string): UserProfileState => ({
     roadmapTopics: []
   },
   roadmapProgress: {},
+  roadmapTimeSpent: {},
   unlockedLevels: {
     'Full-Length': 1,
     'Quantitative Aptitude': 1,
@@ -369,7 +399,6 @@ const DEFAULT_CURRENT_AFFAIRS: CurrentAffairsArticle[] = [
   }
 ];
 
-// Complete Roadmap topics structure for IBPS PO Syllabus (45 Chapters total)
 const ROADMAP_TOPICS_LIST: Omit<RoadmapTopic, 'completionStatus'>[] = [
   // Quant (17 topics)
   { id: 'q_1', subject: 'Quantitative Aptitude', name: 'Number System', notes: 'Core concepts of HCF, LCM, Divisibility Rules, Prime numbers, Remainders and Unit Digit.', practiceQuestionsCount: 150, recommendedBooks: ['Quantitative Aptitude by R.S. Aggarwal', 'Fast Track Objective Arithmetic by Rajesh Verma'], videoLinks: [{ title: 'Number System Masterclass', url: 'https://youtube.com/results?search_query=Number+System+banking+exam' }], level: 1 },
@@ -427,7 +456,7 @@ const ROADMAP_TOPICS_LIST: Omit<RoadmapTopic, 'completionStatus'>[] = [
   { id: 'c_5', subject: 'Computer Awareness', name: 'Cyber Security', notes: 'Malware categories (viruses, worms, trojans), firewalls, cryptography (symmetric/asymmetric keys), phishing, and cyber laws.', practiceQuestionsCount: 130, recommendedBooks: ['Objective Computer Awareness by Arihant'], videoLinks: [{ title: 'Cyber Security guidelines', url: 'https://youtube.com/results?search_query=Cyber+Security+banking+exam' }], level: 5 }
 ];
 
-// Helper functions for date operations
+// Helper to compute rolling reminders
 const subtractDays = (dateStr: string, days: number): string => {
   const d = new Date(dateStr);
   d.setDate(d.getDate() - days);
@@ -439,7 +468,6 @@ const generateSmartReminders = (profile: UserProfileState, notifications: ExamNo
   const autoReminders: Reminder[] = [];
   const today = new Date().toISOString().split('T')[0];
 
-  // Filter notifications that match the user's target exams
   const matchedNotifications = notifications.filter(notif => 
     targetExams.some(exam => 
       notif.title.toLowerCase().includes(exam.toLowerCase()) || 
@@ -456,7 +484,7 @@ const generateSmartReminders = (profile: UserProfileState, notifications: ExamNo
 
       const eventLabel = eventKey
         .replace(/([A-Z])/g, ' $1')
-        .replace(/^./, str => str.toUpperCase()); // e.g. "examDate" -> "Exam Date"
+        .replace(/^./, str => str.toUpperCase());
 
       const intervals: { type: '30_days' | '10_days' | '2_days' | '1_day'; days: number }[] = [
         { type: '30_days', days: 30 },
@@ -467,8 +495,6 @@ const generateSmartReminders = (profile: UserProfileState, notifications: ExamNo
 
       intervals.forEach(({ type, days }) => {
         const reminderDate = subtractDays(dateStr, days);
-        // Only generate reminder if the event is in the future
-        // and the reminder date is in the future or is today
         if (dateStr >= today && reminderDate >= today) {
           autoReminders.push({
             id: `rem_auto_${notif.id}_${eventKey}_${days}d`,
@@ -482,92 +508,33 @@ const generateSmartReminders = (profile: UserProfileState, notifications: ExamNo
     });
   });
 
-  // Keep manually created reminders and merge with new automatic ones, avoiding duplicate IDs
   const manualReminders = profile.reminders.filter(r => !r.id.startsWith('rem_auto_'));
-  
-  // Merge and return
   return [...manualReminders, ...autoReminders];
 };
 
-// Helper to sync user profile state to Supabase in the background
-export async function saveProfileToSupabase(profile: UserProfileState) {
-  if (!isSupabaseConfigured || !supabase) return;
-  try {
-    const { error } = await supabase
-      .from('user_profiles_data')
-      .upsert({
-        email: profile.email.toLowerCase(),
-        unlocked_levels: profile.unlockedLevels,
-        roadmap_progress: profile.roadmapProgress,
-        bookmarks: profile.bookmarks,
-        preferences: profile.preferences,
-        mock_test_history: profile.mockTestHistory,
-        reminders: profile.reminders,
-        liked_formulas: profile.likedFormulas,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'email' });
-      
-    if (error) {
-      console.error('Error syncing profile to Supabase:', error.message);
-    }
-  } catch (err) {
-    console.error('Supabase connection error:', err);
-  }
-}
-
 export const useAppStore = create<AppState>((set, get) => {
-  // Client-side initialization loading from localstorage
   const isClient = typeof window !== 'undefined';
   
-  const initialProfiles: Record<string, UserProfileState> = {};
-  let initialUser: { email: string; name: string } | null = null;
   let initialNotifications = DEFAULT_NOTIFICATIONS;
   let initialJobs = DEFAULT_JOBS;
   let initialCA = DEFAULT_CURRENT_AFFAIRS;
 
   if (isClient) {
     try {
-      const activeUserStr = localStorage.getItem('banking_companion_active_user');
-      if (activeUserStr) {
-        initialUser = JSON.parse(activeUserStr);
-      }
-      
       const storedNotifs = localStorage.getItem('banking_companion_notifications');
-      if (storedNotifs) {
-        initialNotifications = JSON.parse(storedNotifs);
-      }
+      if (storedNotifs) initialNotifications = JSON.parse(storedNotifs);
       const storedJobs = localStorage.getItem('banking_companion_jobs');
-      if (storedJobs) {
-        initialJobs = JSON.parse(storedJobs);
-      }
+      if (storedJobs) initialJobs = JSON.parse(storedJobs);
       const storedCA = localStorage.getItem('banking_companion_current_affairs');
-      if (storedCA) {
-        initialCA = JSON.parse(storedCA);
-      }
-
-      PREDEFINED_ACCOUNTS.forEach(acc => {
-        const stored = localStorage.getItem(`banking_companion_state_${acc.email.replace(/[@.]/g, '_')}`);
-        if (stored) {
-          initialProfiles[acc.email] = JSON.parse(stored);
-        } else {
-          initialProfiles[acc.email] = getInitialProfile(acc.email);
-        }
-      });
+      if (storedCA) initialCA = JSON.parse(storedCA);
     } catch (e) {
       console.error('Error loading state from localStorage:', e);
     }
   }
 
-  // If no profiles loaded, use defaults
-  PREDEFINED_ACCOUNTS.forEach(acc => {
-    if (!initialProfiles[acc.email]) {
-      initialProfiles[acc.email] = getInitialProfile(acc.email);
-    }
-  });
-
   return {
-    currentUser: initialUser,
-    userProfiles: initialProfiles,
+    currentUser: null,
+    userProfiles: {},
     notifications: initialNotifications,
     jobs: initialJobs,
     currentAffairs: initialCA,
@@ -575,8 +542,177 @@ export const useAppStore = create<AppState>((set, get) => {
     lastSyncedAt: isClient ? localStorage.getItem('banking_companion_last_synced') : null,
     isSyncing: false,
     activeTestTopic: null,
+    toast: null,
 
     setActiveTestTopic: (topic) => set({ activeTestTopic: topic }),
+
+    setCurrentUser: async (user) => {
+      set({ currentUser: user });
+      if (user) {
+        // Fetch detailed profile from Supabase normalized tables
+        await get().fetchUserData();
+      }
+    },
+
+    fetchUserData: async () => {
+      const { currentUser } = get();
+      if (!currentUser) return;
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
+      try {
+        // Get user preferences
+        let { data: dbPrefs } = await client
+          .from('user_preferences')
+          .select('*')
+          .eq('user_id', currentUser.id)
+          .maybeSingle();
+          
+        if (!dbPrefs) {
+          const defaultPrefs = {
+            user_id: currentUser.id,
+            theme: 'light' as const,
+            enable_notifications: true,
+            enable_calendar_sync: false,
+            target_exams: ['SBI PO', 'IBPS PO']
+          };
+          await client.from('user_preferences').insert(defaultPrefs);
+          dbPrefs = { ...defaultPrefs, updated_at: new Date().toISOString() };
+        }
+
+        // Fetch user levels
+        const { data: dbLevels } = await client
+          .from('user_levels')
+          .select('*')
+          .eq('user_id', currentUser.id);
+
+        // Fetch roadmap progress
+        const { data: dbProgress } = await client
+          .from('roadmap_progress')
+          .select('*')
+          .eq('user_id', currentUser.id);
+
+        // Fetch bookmarks
+        const { data: dbBookmarks } = await client
+          .from('bookmarks')
+          .select('*')
+          .eq('user_id', currentUser.id);
+
+        // Fetch reminders
+        const { data: dbReminders } = await client
+          .from('reminders')
+          .select('*')
+          .eq('user_id', currentUser.id);
+
+        // Fetch liked formulas
+        const { data: dbFormulas } = await client
+          .from('liked_formulas')
+          .select('*')
+          .eq('user_id', currentUser.id);
+
+        // Fetch test history
+        const { data: dbHistory } = await client
+          .from('test_sessions')
+          .select('*')
+          .eq('user_id', currentUser.id)
+          .eq('is_completed', true)
+          .order('completed_at', { ascending: false });
+
+        // Build UserProfileState
+        const unlockedLevels = {
+          'Full-Length': 1,
+          'Quantitative Aptitude': 1,
+          'Reasoning': 1,
+          'English': 1,
+          'General Awareness': 1,
+          'Computer Awareness': 1
+        };
+        dbLevels?.forEach(lvl => {
+          if (lvl.category in unlockedLevels) {
+            unlockedLevels[lvl.category as keyof typeof unlockedLevels] = lvl.unlocked_level;
+          }
+        });
+
+        const roadmapProgress: Record<string, 'Locked' | 'Learning' | 'Practicing' | 'Completed'> = {};
+        const roadmapTimeSpent: Record<string, number> = {};
+        dbProgress?.forEach(prog => {
+          roadmapProgress[prog.topic_id] = prog.status as any;
+          roadmapTimeSpent[prog.topic_id] = prog.time_spent_minutes || 0;
+        });
+
+        const bookmarks = {
+          notifications: [] as string[],
+          jobs: [] as string[],
+          currentAffairs: [] as string[],
+          roadmapTopics: [] as string[]
+        };
+        dbBookmarks?.forEach(bm => {
+          if (bm.type === 'notification') bookmarks.notifications.push(bm.reference_id);
+          else if (bm.type === 'job') bookmarks.jobs.push(bm.reference_id);
+          else if (bm.type === 'current_affair') bookmarks.currentAffairs.push(bm.reference_id);
+          else if (bm.type === 'roadmap_topic') bookmarks.roadmapTopics.push(bm.reference_id);
+        });
+
+        const reminders = dbReminders?.map(rem => ({
+          id: rem.id,
+          title: rem.title,
+          date: rem.target_date,
+          type: (rem.alert_type || '1_day') as any,
+          triggered: rem.is_triggered
+        })) || [];
+
+        const likedFormulas = dbFormulas?.map(f => ({
+          id: f.formula_id,
+          title: f.title,
+          content: f.content,
+          shortcut: f.shortcut || '',
+          topic: f.topic,
+          subject: f.subject
+        })) || [];
+
+        const mockTestHistory = dbHistory?.map(ts => ({
+          testId: ts.id,
+          title: ts.title,
+          type: ts.type as any,
+          subject: ts.subject || undefined,
+          topic: ts.topic || undefined,
+          scorePct: Number(ts.score_pct || 0),
+          correctAnswers: ts.correct_answers || 0,
+          wrongAnswers: ts.wrong_answers || 0,
+          unattemptedQuestions: ts.unattempted || 0,
+          timeSpentSeconds: ts.time_spent_seconds || 0,
+          completedAt: ts.completed_at || new Date().toISOString(),
+          isCleared: ts.is_cleared || false
+        })) || [];
+
+        const preferences = {
+          theme: (dbPrefs.theme || 'light') as any,
+          targetExams: dbPrefs.target_exams || [],
+          enableBrowserNotifications: dbPrefs.enable_notifications,
+          enableGoogleCalendarSync: dbPrefs.enable_calendar_sync
+        };
+
+        const updatedProfile = {
+          email: currentUser.email,
+          bookmarks,
+          roadmapProgress,
+          roadmapTimeSpent,
+          unlockedLevels,
+          mockTestHistory,
+          reminders,
+          preferences,
+          likedFormulas
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [currentUser.email]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to load user profile details:", err);
+      }
+    },
 
     toggleTheme: () => {
       const { currentUser, userProfiles, updateUserPreferences } = get();
@@ -586,303 +722,342 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     login: (email: string) => {
-      const account = PREDEFINED_ACCOUNTS.find(acc => acc.email.toLowerCase() === email.toLowerCase());
-      if (account) {
-        // Generate automatic reminders on login
-        const state = get();
-        const profile = state.userProfiles[account.email];
-        
-        // Fetch from Supabase in the background to sync cloud state
-        if (isSupabaseConfigured && supabase) {
-          (async () => {
-            try {
-              const { data, error } = await supabase
-                .from('user_profiles_data')
-                .select('*')
-                .eq('email', account.email.toLowerCase())
-                .single();
-
-              if (data && !error) {
-                const updatedProfile: UserProfileState = {
-                  email: account.email,
-                  bookmarks: data.bookmarks || { notifications: [], jobs: [], currentAffairs: [], roadmapTopics: [] },
-                  roadmapProgress: data.roadmap_progress || {},
-                  unlockedLevels: data.unlocked_levels || {
-                    'Full-Length': 1,
-                    'Quantitative Aptitude': 1,
-                    'Reasoning': 1,
-                    'English': 1,
-                    'General Awareness': 1,
-                    'Computer Awareness': 1
-                  },
-                  mockTestHistory: data.mock_test_history || [],
-                  reminders: data.reminders || [],
-                  preferences: data.preferences || DEFAULT_PREFERENCES,
-                  likedFormulas: data.liked_formulas || []
-                };
-
-                const stateNow = get();
-                const mergedReminders = generateSmartReminders(updatedProfile, stateNow.notifications);
-                const finalProfile = { ...updatedProfile, reminders: mergedReminders };
-
-                set({
-                  userProfiles: {
-                    ...stateNow.userProfiles,
-                    [account.email]: finalProfile
-                  }
-                });
-
-                if (typeof window !== 'undefined') {
-                  localStorage.setItem(
-                    `banking_companion_state_${account.email.replace(/[@.]/g, '_')}`,
-                    JSON.stringify(finalProfile)
-                  );
-                }
-              }
-            } catch (err) {
-              console.error('Error fetching profile from Supabase:', err);
-            }
-          })();
-        }
-
-        if (profile) {
-          const updatedReminders = generateSmartReminders(profile, state.notifications);
-          const updatedProfile = {
-            ...profile,
-            reminders: updatedReminders
-          };
-          const updatedProfiles = {
-            ...state.userProfiles,
-            [account.email]: updatedProfile
-          };
-          set({ userProfiles: updatedProfiles });
-          if (typeof window !== 'undefined') {
-            localStorage.setItem(
-              `banking_companion_state_${account.email.replace(/[@.]/g, '_')}`,
-              JSON.stringify(updatedProfile)
-            );
-          }
-          if (isSupabaseConfigured) {
-            saveProfileToSupabase(updatedProfile);
-          }
-        }
-
-        set({ currentUser: account });
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('banking_companion_active_user', JSON.stringify(account));
-        }
-        return true;
-      }
-      return false;
+      return false; // Delegated to NextAuth login page
     },
 
     logout: () => {
       set({ currentUser: null });
-      if (typeof window !== 'undefined') {
-        localStorage.removeItem('banking_companion_active_user');
-      }
+      nextAuthSignOut({ callbackUrl: "/login" });
     },
 
-    updateUserPreferences: (prefs) => {
-      const { currentUser, userProfiles, notifications } = get();
+    showToast: (message, type = 'info') => {
+      set({ toast: { message, type } });
+    },
+    
+    clearToast: () => {
+      set({ toast: null });
+    },
+
+    updateUserPreferences: async (prefs) => {
+      const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
       const updatedPrefs = {
         ...profile.preferences,
         ...prefs
       };
 
-      // Create a temp profile to generate new reminders
-      const tempProfile = {
-        ...profile,
-        preferences: updatedPrefs
-      };
-      
-      const updatedReminders = generateSmartReminders(tempProfile, notifications);
+      try {
+        const { error } = await client
+          .from('user_preferences')
+          .upsert({
+            user_id: currentUser.id,
+            theme: updatedPrefs.theme,
+            enable_notifications: updatedPrefs.enableBrowserNotifications,
+            enable_calendar_sync: updatedPrefs.enableGoogleCalendarSync,
+            target_exams: updatedPrefs.targetExams,
+            updated_at: new Date().toISOString()
+          });
 
-      const updatedProfile = {
-        ...profile,
-        preferences: updatedPrefs,
-        reminders: updatedReminders
-      };
+        if (error) throw new Error(error.message);
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+        // Update local state and regenerate auto smart reminders
+        const tempProfile = { ...profile, preferences: updatedPrefs };
+        const updatedReminders = generateSmartReminders(tempProfile, get().notifications);
+        const updatedProfile = { ...tempProfile, reminders: updatedReminders };
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to update user preferences:", err);
       }
     },
 
-    toggleBookmark: (type, id) => {
+    toggleBookmark: async (type, id) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
       const currentList = profile.bookmarks[type];
-      
-      const newList = currentList.includes(id)
-        ? currentList.filter(item => item !== id)
-        : [...currentList, id];
+      const exists = currentList.includes(id);
 
-      const updatedProfile = {
-        ...profile,
-        bookmarks: {
-          ...profile.bookmarks,
-          [type]: newList
+      // Translate type to DB BookmarkType enum
+      let dbType: 'notification' | 'job' | 'current_affair' | 'roadmap_topic' = 'notification';
+      if (type === 'jobs') dbType = 'job';
+      else if (type === 'currentAffairs') dbType = 'current_affair';
+      else if (type === 'roadmapTopics') dbType = 'roadmap_topic';
+
+      try {
+        if (exists) {
+          const { error } = await client
+            .from('bookmarks')
+            .delete()
+            .eq('user_id', currentUser.id)
+            .eq('type', dbType)
+            .eq('reference_id', id);
+          if (error) throw new Error(error.message);
+        } else {
+          const { error } = await client
+            .from('bookmarks')
+            .insert({
+              user_id: currentUser.id,
+              type: dbType,
+              reference_id: id
+            });
+          if (error) throw new Error(error.message);
         }
-      };
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+        const newList = exists
+          ? currentList.filter(item => item !== id)
+          : [...currentList, id];
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        const updatedProfile = {
+          ...profile,
+          bookmarks: {
+            ...profile.bookmarks,
+            [type]: newList
+          }
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to toggle bookmark:", err);
       }
     },
 
-    updateRoadmapTopicStatus: (topicId, status) => {
+    updateRoadmapTopicStatus: async (topicId, status) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
-      
-      const updatedProfile = {
-        ...profile,
-        roadmapProgress: {
-          ...profile.roadmapProgress,
-          [topicId]: status
-        }
-      };
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+      try {
+        const { error } = await client
+          .from('roadmap_progress')
+          .upsert({
+            user_id: currentUser.id,
+            topic_id: topicId,
+            status,
+            last_studied_at: new Date().toISOString()
+          }, { onConflict: 'user_id,topic_id' });
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        if (error) throw new Error(error.message);
+
+        const updatedProfile = {
+          ...profile,
+          roadmapProgress: {
+            ...profile.roadmapProgress,
+            [topicId]: status
+          }
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to update roadmap topic status:", err);
       }
     },
 
-    submitMockTestResult: (result) => {
+    logStudyTime: async (topicId, minutes) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
-      
-      // Calculate isCleared (score >= 60%)
-      const isCleared = result.scorePct >= 60;
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
+      try {
+        const { data } = await client
+          .from('roadmap_progress')
+          .select('time_spent_minutes, status')
+          .eq('user_id', currentUser.id)
+          .eq('topic_id', topicId)
+          .maybeSingle();
+
+        const currentMins = data?.time_spent_minutes || 0;
+        const currentStatus = data?.status || 'Learning';
+
+        const { error } = await client
+          .from('roadmap_progress')
+          .upsert({
+            user_id: currentUser.id,
+            topic_id: topicId,
+            time_spent_minutes: currentMins + minutes,
+            status: currentStatus,
+            last_studied_at: new Date().toISOString()
+          }, { onConflict: 'user_id,topic_id' });
+
+        if (error) throw new Error(error.message);
+
+        await get().fetchUserData();
+      } catch (err) {
+        console.error("Failed to log study time:", err);
+      }
+    },
+
+    submitMockTestResult: async (result) => {
+      const { currentUser, userProfiles } = get();
+      if (!currentUser) return;
+
+      const userEmail = currentUser.email;
+      const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
+      // Level game logic and sectional cutoffs: score >= passingPct (cleared)
+      const isCleared = result.isCleared; // passed in from test engine
       const completedTest: MockTestHistory = {
         ...result,
         completedAt: new Date().toISOString(),
         isCleared
       };
 
-      // Update test history
-      const newHistory = [completedTest, ...profile.mockTestHistory];
+      try {
+        // 1. Insert session record to Supabase
+        const { data: dbSession, error: sessionErr } = await client
+          .from('test_sessions')
+          .insert({
+            user_id: currentUser.id,
+            title: result.title,
+            type: result.type,
+            subject: result.subject || null,
+            topic: result.topic || null,
+            level: result.level || 1,
+            total_questions: result.correctAnswers + result.wrongAnswers + result.unattemptedQuestions,
+            negative_marking: true, // defaults
+            score_pct: result.scorePct,
+            correct_answers: result.correctAnswers,
+            wrong_answers: result.wrongAnswers,
+            unattempted: result.unattemptedQuestions,
+            time_spent_seconds: result.timeSpentSeconds,
+            is_cleared: isCleared,
+            is_completed: true,
+            completed_at: completedTest.completedAt
+          })
+          .select()
+          .single();
 
-      // Update level unlocking logic: If cleared, unlock next level
-      const updatedUnlockedLevels = { ...profile.unlockedLevels };
-      const updatedRoadmapProgress = { ...profile.roadmapProgress };
+        if (sessionErr) throw new Error(sessionErr.message);
 
-      if (isCleared) {
-        if (result.type === 'Topic' && result.topic) {
-          // Find topic in roadmapStructure matching the topic name
-          const matchTopic = get().roadmapStructure.find(
-            t => t.name.toLowerCase() === result.topic?.toLowerCase() && t.subject === result.subject
-          );
-          if (matchTopic) {
-            updatedRoadmapProgress[matchTopic.id] = 'Completed';
-          }
-        } else {
-          const testType = result.type;
-          const testCategory = testType === 'Full-Length' ? 'Full-Length' : (result.subject || 'Full-Length');
-          
-          // Find the current level that was just cleared
-          // Level tests will have titles like "Level 1 Test", "Level 2 Test", etc.
-          const match = result.title.match(/Level\s+(\d+)/i);
-          if (match) {
-            const clearedLevelNum = parseInt(match[1]);
-            const currentUnlocked = updatedUnlockedLevels[testCategory as keyof typeof updatedUnlockedLevels] || 1;
-            if (clearedLevelNum === currentUnlocked) {
-              updatedUnlockedLevels[testCategory as keyof typeof updatedUnlockedLevels] = currentUnlocked + 1;
+        // 2. Update level unlocking logic: If cleared, unlock next level
+        const updatedUnlockedLevels = { ...profile.unlockedLevels };
+        const updatedRoadmapProgress = { ...profile.roadmapProgress };
+
+        if (isCleared) {
+          if (result.type === 'Topic' && result.topic) {
+            const matchTopic = get().roadmapStructure.find(
+              t => t.name.toLowerCase() === result.topic?.toLowerCase() && t.subject === result.subject
+            );
+            if (matchTopic) {
+              updatedRoadmapProgress[matchTopic.id] = 'Completed';
+              // Sync completed status to DB
+              await client
+                .from('roadmap_progress')
+                .upsert({
+                  user_id: currentUser.id,
+                  topic_id: matchTopic.id,
+                  status: 'Completed',
+                  last_studied_at: new Date().toISOString()
+                }, { onConflict: 'user_id,topic_id' });
+            }
+          } else {
+            const testType = result.type;
+            const testCategory = testType === 'Full-Length' ? 'Full-Length' : (result.subject || 'Full-Length');
+            
+            const match = result.title.match(/Level\s+(\d+)/i);
+            if (match) {
+              const clearedLevelNum = parseInt(match[1]);
+              const currentUnlocked = updatedUnlockedLevels[testCategory as keyof typeof updatedUnlockedLevels] || 1;
+              if (clearedLevelNum === currentUnlocked) {
+                const nextLvl = currentUnlocked + 1;
+                updatedUnlockedLevels[testCategory as keyof typeof updatedUnlockedLevels] = nextLvl;
+                
+                // Sync user level to DB
+                await client
+                  .from('user_levels')
+                  .upsert({
+                    user_id: currentUser.id,
+                    category: testCategory,
+                    unlocked_level: nextLvl
+                  }, { onConflict: 'user_id,category' });
+              }
             }
           }
         }
-      }
 
-      // Automatically sync reminders if they set notifications
-      const newReminders = [...profile.reminders];
-      if (result.type === 'Full-Length' && isCleared) {
-        newReminders.push({
-          id: `reminder_${Date.now()}`,
-          title: `Congratulations! Unlocked Level ${updatedUnlockedLevels['Full-Length']} Mock Test`,
-          date: new Date().toISOString(),
-          type: '1_day',
-          triggered: false
-        });
-      }
+        // Add auto reminder for level unlock if appropriate
+        const newReminders = [...profile.reminders];
+        if (result.type === 'Full-Length' && isCleared) {
+          const remTitle = `Congratulations! Unlocked Level ${updatedUnlockedLevels['Full-Length']} Mock Test`;
+          const remDate = new Date().toISOString().split('T')[0];
+          
+          const { data: dbRem } = await client
+            .from('reminders')
+            .insert({
+              user_id: currentUser.id,
+              title: remTitle,
+              target_date: remDate,
+              alert_type: '1_day',
+              is_auto_generated: true
+            })
+            .select()
+            .single();
 
-      const updatedProfile = {
-        ...profile,
-        mockTestHistory: newHistory,
-        unlockedLevels: updatedUnlockedLevels,
-        roadmapProgress: updatedRoadmapProgress,
-        reminders: newReminders
-      };
+          if (dbRem) {
+            newReminders.push({
+              id: dbRem.id,
+              title: dbRem.title,
+              date: dbRem.target_date,
+              type: '1_day',
+              triggered: false
+            });
+          }
+        }
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+        const newHistory = [completedTest, ...profile.mockTestHistory];
+        const updatedProfile = {
+          ...profile,
+          mockTestHistory: newHistory,
+          unlockedLevels: updatedUnlockedLevels,
+          roadmapProgress: updatedRoadmapProgress,
+          reminders: newReminders
+        };
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to submit mock test result:", err);
       }
     },
 
     syncData: async () => {
       set({ isSyncing: true });
       try {
-        // Dynamic Scraping Engine Trigger (represented here, fetches latest values from endpoints)
         const response = await fetch(`/api/cron-sync?t=${Date.now()}`, { cache: 'no-store' });
         if (response.ok) {
           const data = await response.json();
@@ -919,23 +1094,38 @@ export const useAppStore = create<AppState>((set, get) => {
             const userEmail = currentUser.email;
             const profile = userProfiles[userEmail];
             if (profile) {
+              const client = getClientSupabase(currentUser.supabaseAccessToken);
               const updatedReminders = generateSmartReminders(profile, mergedNotifications);
+              
+              // Find new auto reminders to save to DB
+              const newAutoRems = updatedReminders.filter(ur => ur.id.startsWith('rem_auto_') && !profile.reminders.some(pr => pr.id === ur.id));
+              for (const rem of newAutoRems) {
+                await client.from('reminders').insert({
+                  id: rem.id,
+                  user_id: currentUser.id,
+                  title: rem.title,
+                  target_date: rem.date,
+                  alert_type: rem.type,
+                  is_auto_generated: true
+                });
+              }
+
               const updatedProfile = {
                 ...profile,
                 reminders: updatedReminders
               };
-              const updatedProfiles = {
-                ...userProfiles,
-                [userEmail]: updatedProfile
-              };
-              set({ userProfiles: updatedProfiles });
+              
+              set(state => ({
+                userProfiles: {
+                  ...state.userProfiles,
+                  [userEmail]: updatedProfile
+                }
+              }));
+              
               localStorage.setItem(
                 `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
                 JSON.stringify(updatedProfile)
               );
-              if (isSupabaseConfigured) {
-                saveProfileToSupabase(updatedProfile);
-              }
             }
           }
         }
@@ -946,120 +1136,183 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    addReminder: (reminder) => {
+    addReminder: async (reminder) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
 
-      const newReminder: Reminder = {
-        ...reminder,
-        id: `reminder_${Date.now()}`,
-        triggered: false
-      };
+      try {
+        const { data: dbRem, error } = await client
+          .from('reminders')
+          .insert({
+            user_id: currentUser.id,
+            title: reminder.title,
+            target_date: reminder.date,
+            alert_type: reminder.type,
+            is_auto_generated: false
+          })
+          .select()
+          .single();
 
-      const updatedProfile = {
-        ...profile,
-        reminders: [...profile.reminders, newReminder]
-      };
+        if (error) throw new Error(error.message);
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+        const newReminder: Reminder = {
+          id: dbRem.id,
+          title: dbRem.title,
+          date: dbRem.target_date,
+          type: (dbRem.alert_type || '1_day') as any,
+          triggered: dbRem.is_triggered
+        };
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        const updatedProfile = {
+          ...profile,
+          reminders: [...profile.reminders, newReminder]
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to add reminder:", err);
       }
     },
 
-    removeReminder: (id) => {
+    removeReminder: async (id) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
 
-      const updatedProfile = {
-        ...profile,
-        reminders: profile.reminders.filter(r => r.id !== id)
-      };
+      try {
+        const { error } = await client
+          .from('reminders')
+          .delete()
+          .eq('id', id);
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+        if (error) throw new Error(error.message);
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+        const updatedProfile = {
+          ...profile,
+          reminders: profile.reminders.filter(r => r.id !== id)
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to remove reminder:", err);
       }
     },
 
-    clearUserProfileData: (email) => {
-      const state = get();
-      const initialProfile = getInitialProfile(email);
-      const updatedProfiles = {
-        ...state.userProfiles,
-        [email]: initialProfile
-      };
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${email.replace(/[@.]/g, '_')}`,
-          JSON.stringify(initialProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(initialProfile);
+    clearUserProfileData: async (email) => {
+      const { currentUser } = get();
+      if (!currentUser) return;
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+
+      try {
+        // Remove all user-specific data from DB
+        await client.from('test_sessions').delete().eq('user_id', currentUser.id);
+        await client.from('bookmarks').delete().eq('user_id', currentUser.id);
+        await client.from('roadmap_progress').delete().eq('user_id', currentUser.id);
+        await client.from('reminders').delete().eq('user_id', currentUser.id);
+        await client.from('liked_formulas').delete().eq('user_id', currentUser.id);
+        await client.from('user_levels').delete().eq('user_id', currentUser.id);
+
+        const initialProfile = getInitialProfile(email);
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [email]: initialProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to clear user profile data:", err);
       }
     },
     
-    toggleLikeFormula: (formula) => {
+    toggleLikeFormula: async (formula) => {
       const { currentUser, userProfiles } = get();
       if (!currentUser) return;
 
       const userEmail = currentUser.email;
       const profile = userProfiles[userEmail];
+      const client = getClientSupabase(currentUser.supabaseAccessToken);
+      
       const currentLikes = profile.likedFormulas || [];
       const exists = currentLikes.some(f => f.id === formula.id);
-      const newLikes = exists
-        ? currentLikes.filter(f => f.id !== formula.id)
-        : [...currentLikes, formula];
 
-      const updatedProfile = {
-        ...profile,
-        likedFormulas: newLikes
-      };
+      try {
+        if (exists) {
+          const { error } = await client
+            .from('liked_formulas')
+            .delete()
+            .eq('user_id', currentUser.id)
+            .eq('formula_id', formula.id);
+          if (error) throw new Error(error.message);
 
-      const updatedProfiles = {
-        ...userProfiles,
-        [userEmail]: updatedProfile
-      };
+          // Also remove from spaced repetition
+          await client
+            .from('spaced_repetition')
+            .delete()
+            .eq('user_id', currentUser.id)
+            .eq('item_id', formula.id)
+            .eq('item_type', 'formula');
+        } else {
+          const { error } = await client
+            .from('liked_formulas')
+            .insert({
+              user_id: currentUser.id,
+              formula_id: formula.id,
+              title: formula.title,
+              content: formula.content,
+              shortcut: formula.shortcut || null,
+              topic: formula.topic,
+              subject: formula.subject
+            });
+          if (error) throw new Error(error.message);
 
-      set({ userProfiles: updatedProfiles });
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(
-          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
-          JSON.stringify(updatedProfile)
-        );
-      }
-      if (isSupabaseConfigured) {
-        saveProfileToSupabase(updatedProfile);
+          // Also insert into spaced repetition queue
+          await client
+            .from('spaced_repetition')
+            .upsert({
+              user_id: currentUser.id,
+              item_id: formula.id,
+              item_type: 'formula',
+              easiness_factor: 2.5,
+              interval_days: 1,
+              repetition_count: 0,
+              next_review_date: new Date().toISOString().split('T')[0]
+            }, { onConflict: 'user_id,item_id,item_type' });
+        }
+
+        const newLikes = exists
+          ? currentLikes.filter(f => f.id !== formula.id)
+          : [...currentLikes, formula];
+
+        const updatedProfile = {
+          ...profile,
+          likedFormulas: newLikes
+        };
+
+        set(state => ({
+          userProfiles: {
+            ...state.userProfiles,
+            [userEmail]: updatedProfile
+          }
+        }));
+      } catch (err) {
+        console.error("Failed to toggle liked formula:", err);
       }
     }
   };

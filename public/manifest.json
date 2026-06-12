@@ -1,0 +1,18 @@
+{
+  "name": "Banking Exam Companion",
+  "short_name": "ExamCompanion",
+  "description": "Premium preparation companion for SBI PO, IBPS PO, and RBI Grade B examinations.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,29 +1,26 @@
 'use client';
 
 import React, { useState } from 'react';
-import { useAppStore, PREDEFINED_ACCOUNTS } from '@/lib/store';
+import { useAppStore } from '@/lib/store';
 import { 
   User, 
   Settings, 
   Target, 
-  Bell, 
-  Calendar, 
-  RefreshCw, 
   ShieldAlert,
-  Award,
-  BookOpen
+  LogOut,
+  UserCheck
 } from 'lucide-react';
 
 export default function ProfileModule() {
   const { 
     currentUser, 
     userProfiles, 
-    login, 
     updateUserPreferences,
-    clearUserProfileData
+    clearUserProfileData,
+    logout
   } = useAppStore();
 
-  const [passwordInput, setPasswordInput] = useState('');
+  const [confirmDeleteInput, setConfirmDeleteInput] = useState('');
   const [clearError, setClearError] = useState('');
   const [clearSuccess, setClearSuccess] = useState('');
 
@@ -38,16 +35,8 @@ export default function ProfileModule() {
     mockTestHistory: []
   };
 
-  const handleSwitchAccount = (switchEmail: string) => {
-    login(switchEmail);
-    // Reload state parameters
-    if (typeof window !== 'undefined') {
-      window.location.reload();
-    }
-  };
-
   const toggleTargetExam = (exam: string) => {
-    const currentTargets = profile.preferences.targetExams;
+    const currentTargets = profile.preferences.targetExams || [];
     const newTargets = currentTargets.includes(exam)
       ? currentTargets.filter(e => e !== exam)
       : [...currentTargets, exam];
@@ -62,17 +51,13 @@ export default function ProfileModule() {
 
     if (!currentUser) return;
 
-    const p1 = process.env.NEXT_PUBLIC_USER_1_PASSWORD || 'bankpass123';
-    const p2 = process.env.NEXT_PUBLIC_USER_2_PASSWORD || 'vyshnavi123';
-    const expectedPassword = currentUser.email.toLowerCase() === PREDEFINED_ACCOUNTS[0].email.toLowerCase() ? p1 : p2;
-
-    if (passwordInput !== expectedPassword) {
-      setClearError('Incorrect password. Profile data was not erased.');
+    if (confirmDeleteInput.trim().toUpperCase() !== 'DELETE') {
+      setClearError('Please type "DELETE" to confirm.');
       return;
     }
 
     clearUserProfileData(currentUser.email);
-    setPasswordInput('');
+    setConfirmDeleteInput('');
     setClearSuccess('Profile data cleared successfully! Reloading...');
     
     setTimeout(() => {
@@ -89,7 +74,7 @@ export default function ProfileModule() {
           <User className="h-6 w-6 text-blue-600" /> User Profile & Settings
         </h2>
         <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">
-          Switch test accounts, toggle preferences, target exams, and sync parameters
+          Manage your account preferences, target exams, and data sync settings.
         </p>
       </div>
 
@@ -99,14 +84,14 @@ export default function ProfileModule() {
         <div className="lg:col-span-2 space-y-6 text-xs font-semibold">
           
           {/* Target exams card */}
-          <div className="bg-white dark:bg-slate-850 p-6 rounded-2xl border border-slate-105 dark:border-slate-800/80 shadow-sm">
+          <div className="bg-white dark:bg-slate-850 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm">
             <h3 className="font-bold text-slate-850 dark:text-white text-sm mb-4 flex items-center gap-2">
               <Target className="h-4.5 w-4.5 text-blue-600" /> Target Banking Exams
             </h3>
             
             <div className="flex flex-wrap gap-2.5 font-bold">
               {['SBI PO', 'IBPS PO', 'RBI Grade B', 'NABARD Grade A', 'LIC AAO'].map((exam) => {
-                const isSelected = profile.preferences.targetExams.includes(exam);
+                const isSelected = (profile.preferences.targetExams || []).includes(exam);
                 return (
                   <button
                     key={exam}
@@ -114,7 +99,7 @@ export default function ProfileModule() {
                     className={`px-4 py-2 rounded-xl border transition cursor-pointer ${
                       isSelected
                         ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-500/10'
-                        : 'bg-white dark:bg-slate-800 border-slate-205 dark:border-slate-700 text-slate-650 hover:bg-slate-50'
+                        : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 hover:bg-slate-50 dark:text-slate-350'
                     }`}
                   >
                     {exam}
@@ -125,7 +110,7 @@ export default function ProfileModule() {
           </div>
 
           {/* Preferences Settings */}
-          <div className="bg-white dark:bg-slate-850 p-6 rounded-2xl border border-slate-105 dark:border-slate-800/80 shadow-sm space-y-5">
+          <div className="bg-white dark:bg-slate-850 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-5">
             <h3 className="font-bold text-slate-850 dark:text-white text-sm flex items-center gap-2">
               <Settings className="h-4.5 w-4.5 text-blue-600" /> Application Preferences
             </h3>
@@ -193,14 +178,14 @@ export default function ProfileModule() {
               )}
               
               <div className="space-y-1">
-                <label className="block text-slate-450 text-[10px]">Enter Password to Confirm</label>
+                <label className="block text-slate-450 text-[10px]">Type <span className="font-bold text-rose-600">DELETE</span> to confirm</label>
                 <input
-                  type="password"
+                  type="text"
                   required
-                  placeholder="••••••••"
-                  value={passwordInput}
-                  onChange={(e) => setPasswordInput(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-205 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
+                  placeholder="DELETE"
+                  value={confirmDeleteInput}
+                  onChange={(e) => setConfirmDeleteInput(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
                 />
               </div>
 
@@ -214,43 +199,40 @@ export default function ProfileModule() {
           </div>
         </div>
 
-        {/* Account Switcher Sidebar (1 Column) */}
+        {/* Account Info Sidebar (1 Column) */}
         <div className="space-y-6 text-xs">
-          <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-4">
+          <div className="bg-white dark:bg-slate-850 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm space-y-4">
             <h3 className="font-bold text-slate-850 dark:text-white text-sm flex items-center gap-2">
-              <RefreshCw className="h-4.5 w-4.5 text-blue-600" /> Predefined Test Accounts
+              <UserCheck className="h-4.5 w-4.5 text-blue-600" /> Account Information
             </h3>
-            <p className="text-[10px] text-slate-400 leading-relaxed mb-4">
-              Toggle between the two predefined user states to test completely isolated bookmarks, test histories, and roadmap checkmarks.
-            </p>
+            
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800/60 rounded-2xl space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm">
+                  {currentUser?.name?.charAt(0).toUpperCase() || 'U'}
+                </div>
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-850 dark:text-white text-xs truncate">{currentUser?.name}</div>
+                  <div className="text-[10px] text-slate-400 truncate mt-0.5">{currentUser?.email}</div>
+                </div>
+              </div>
 
-            <div className="space-y-3 font-semibold">
-              {PREDEFINED_ACCOUNTS.map((acc) => {
-                const isActive = acc.email === currentUser?.email;
-                return (
-                  <button
-                    key={acc.email}
-                    onClick={() => handleSwitchAccount(acc.email)}
-                    className={`w-full p-4 rounded-2xl border text-left flex items-center gap-3 transition cursor-pointer ${
-                      isActive
-                        ? 'border-blue-500 bg-blue-50/20 text-slate-800 dark:text-white dark:bg-slate-900/60'
-                        : 'border-slate-150 dark:border-slate-800 bg-white hover:bg-slate-50 text-slate-650'
-                    }`}
-                  >
-                    <div className={`h-8 w-8 rounded-full flex items-center justify-center font-bold text-xs ${
-                      isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {acc.name.charAt(0)}
-                    </div>
-                    
-                    <div className="min-w-0">
-                      <div className="font-bold text-xs truncate">{acc.name}</div>
-                      <div className="text-[10px] text-slate-400 truncate mt-0.5">{acc.email}</div>
-                    </div>
-                  </button>
-                );
-              })}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex justify-between items-center text-[10px]">
+                <span className="text-slate-400 font-bold uppercase tracking-wider">Access Role</span>
+                <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 font-bold rounded uppercase">
+                  {currentUser?.role || 'student'}
+                </span>
+              </div>
             </div>
+
+            <button
+              onClick={() => logout()}
+              type="button"
+              className="w-full py-3 bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/20 dark:hover:bg-rose-950/40 text-rose-600 border border-rose-100 dark:border-rose-900/30 rounded-2xl font-bold flex items-center justify-center gap-2 transition cursor-pointer text-xs"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign Out
+            </button>
           </div>
 
           {/* Database isolation warning */}

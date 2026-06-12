@@ -13,7 +13,7 @@ import {
   BookOpen,
   Award
 } from 'lucide-react';
-import { useAppStore, getMilestoneInfo } from '@/lib/store';
+import { useAppStore, getMilestoneInfo, ExamNotification } from '@/lib/store';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -102,6 +102,69 @@ export default function DashboardHome({ setActiveTab }: { setActiveTab: (tab: st
     const diff = target.getTime() - today.getTime();
     const days = Math.ceil(diff / (1000 * 60 * 60 * 24));
     return days > 0 ? `${days} days` : 'Exam Over';
+  };
+
+  const downloadIcs = (notif: ExamNotification) => {
+    const sanitize = (str: string) => str.replace(/[,;]/g, '\\$&');
+    const prelimsDate = notif.importantDates?.examDate;
+    if (!prelimsDate) return;
+
+    const dateObj = new Date(prelimsDate);
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const day = String(dateObj.getDate()).padStart(2, '0');
+
+    const dtStart = `${year}${month}${day}T090000`;
+    const dtEnd = `${year}${month}${day}T120000`;
+
+    const eventList = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//Banking Exam Companion//Calendar//EN',
+      'BEGIN:VEVENT',
+      `UID:exam-prelims-${notif.id}@companion`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+      `DTSTART:${dtStart}`,
+      `DTEND:${dtEnd}`,
+      `SUMMARY:${sanitize(notif.organization + ' Phase 1 / Prelims')}`,
+      `DESCRIPTION:${sanitize('Preparation deadline. Official exam: ' + prelimsDate)}`,
+      'END:VEVENT'
+    ];
+
+    const mainsDate = notif.importantDates?.interviewDate || notif.importantDates?.finalSelectionDate;
+    if (mainsDate) {
+      const mDateObj = new Date(mainsDate);
+      const mYear = mDateObj.getFullYear();
+      const mMonth = String(mDateObj.getMonth() + 1).padStart(2, '0');
+      const mDay = String(mDateObj.getDate()).padStart(2, '0');
+      
+      const mStart = `${mYear}${mMonth}${mDay}T090000`;
+      const mEnd = `${mYear}${mMonth}${mDay}T120000`;
+
+      eventList.push(
+        'BEGIN:VEVENT',
+        `UID:exam-mains-${notif.id}@companion`,
+        `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').split('.')[0]}Z`,
+        `DTSTART:${mStart}`,
+        `DTEND:${mEnd}`,
+        `SUMMARY:${sanitize(notif.organization + ' Phase 2 / Mains')}`,
+        `DESCRIPTION:${sanitize('Phase 2 Exam date: ' + mainsDate)}`,
+        'END:VEVENT'
+      );
+    }
+
+    eventList.push('END:VCALENDAR');
+
+    const icsContent = eventList.join('\r\n');
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${notif.organization}_exam_calendar.ics`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -324,28 +387,48 @@ export default function DashboardHome({ setActiveTab }: { setActiveTab: (tab: st
           <h3 className="font-bold text-slate-800 dark:text-white text-base mb-4 flex items-center gap-2">
             <CalendarIcon className="h-5 w-5 text-blue-600" /> Exam Countdowns
           </h3>
-          <div className="space-y-4 flex-1">
-            {(notifications || []).map((notif) => (
-              <div 
-                key={notif.id}
-                className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-100 dark:border-slate-700/40 hover:border-blue-200 transition"
-              >
-                <div className="flex justify-between items-start mb-1.5">
-                  <span className="px-2 py-0.5 text-[10px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 rounded uppercase">
-                    {notif.organization}
-                  </span>
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    {getDaysLeft(notif.importantDates.examDate)}
-                  </span>
+          <div className="space-y-4 flex-1 overflow-y-auto max-h-[400px]">
+            {(notifications || []).map((notif) => {
+              const prelimsDate = notif.importantDates?.examDate;
+              const mainsDate = notif.importantDates?.interviewDate || notif.importantDates?.finalSelectionDate;
+
+              return (
+                <div 
+                  key={notif.id}
+                  className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-100 dark:border-slate-700/40 hover:border-blue-200 transition space-y-2.5 text-[10px]"
+                >
+                  <div className="flex justify-between items-start">
+                    <span className="px-2 py-0.5 text-[9px] font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 rounded uppercase">
+                      {notif.organization}
+                    </span>
+                    <span className="text-xs font-extrabold text-blue-600 dark:text-blue-400">
+                      {prelimsDate ? getDaysLeft(prelimsDate) : 'TBD'}
+                    </span>
+                  </div>
+                  <h4 className="text-xs font-bold text-slate-850 dark:text-slate-200 leading-snug line-clamp-2">
+                    {notif.title}
+                  </h4>
+                  <div className="space-y-1 text-slate-500 dark:text-slate-400 font-semibold border-t border-slate-100 dark:border-slate-800 pt-2">
+                    <div className="flex items-center justify-between">
+                      <span>Phase 1 (Prelims):</span>
+                      <span className="font-bold text-slate-700 dark:text-slate-350">{prelimsDate || 'TBD'}</span>
+                    </div>
+                    {mainsDate && (
+                      <div className="flex items-center justify-between">
+                        <span>Phase 2 (Mains/Int):</span>
+                        <span className="font-bold text-slate-700 dark:text-slate-350">{mainsDate}</span>
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => downloadIcs(notif)}
+                    className="w-full mt-1 py-1.5 bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-750 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-lg font-bold flex items-center justify-center gap-1 transition cursor-pointer text-[9px]"
+                  >
+                    <CalendarIcon className="h-3 w-3 text-blue-650" /> Download Calendar Item (.ics)
+                  </button>
                 </div>
-                <h4 className="text-xs font-semibold text-slate-800 dark:text-slate-200 leading-normal line-clamp-2">
-                  {notif.title}
-                </h4>
-                <div className="mt-2.5 flex items-center justify-between text-[11px] text-slate-400">
-                  <span className="flex items-center gap-1"><Clock className="h-3 w-3" /> Exam: {notif.importantDates.examDate}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
