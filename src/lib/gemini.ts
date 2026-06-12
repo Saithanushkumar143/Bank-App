@@ -3,7 +3,14 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const apiKey = process.env.GEMINI_API_KEY || '';
 export const isGeminiConfigured = !!apiKey;
 
+const apiKeySecondary = process.env.GEMINI_API_KEY_SECONDARY || '';
+export const isGeminiSecondaryConfigured = !!apiKeySecondary;
+
+const groqApiKey = process.env.GROQ_API_KEY || '';
+export const isGroqConfigured = !!groqApiKey && !groqApiKey.includes('PLACEHOLDER');
+
 const genAI = isGeminiConfigured ? new GoogleGenerativeAI(apiKey) : null;
+export const genAISecondary = isGeminiSecondaryConfigured ? new GoogleGenerativeAI(apiKeySecondary) : null;
 
 export interface Question {
   id: string;
@@ -689,123 +696,222 @@ function generateProceduralComputerQuestion(index: number, topic: string): Omit<
   return templates[index % templates.length]();
 }
 
+// Groq Question Generator
+export async function generateMockQuestionsWithGroq(
+  subject: string,
+  topic: string,
+  count: number = 25,
+  level: number = 1
+): Promise<Question[]> {
+  const apiKey = process.env.GROQ_API_KEY || '';
+  if (!apiKey || apiKey.includes('PLACEHOLDER')) {
+    throw new Error("Groq API key not configured");
+  }
+
+  const hardnessDesc = 
+    level <= 3 ? "Easy: basic concepts, direct calculations, simple rules." :
+    level <= 6 ? "Medium: double-step calculations, tricky exam patterns, common PO level." :
+    level <= 8 ? "Hard: advanced formulas, multi-variable logic puzzles, higher vocabulary." :
+    "Extremely Hard / SBI PO Mains Level: complex data sets, multi-variable constraints, dense reading.";
+
+  const prompt = `
+    You are an expert banking exam paper setter for SBI PO / IBPS PO.
+    Generate exactly ${count} multiple choice questions (MCQs) for the topic "${topic}" in the subject "${subject}".
+    The difficulty level is ${level} of 10 (${hardnessDesc}).
+
+    CRITICAL RULES:
+    1. The questions generated MUST belong ONLY to the specific topic "${topic}". Do not include questions from other topics or general math/logic.
+    2. Double check that all questions directly test skills related to "${topic}".
+    3. Vary numerical values, scenarios, and question formats to ensure they are unique.
+    4. Random seed: ${Math.random()}.
+
+    The output MUST be a valid JSON object containing a single key "questions", which is an array of objects with these exact keys:
+    - questionText: string (the exam question, realistic and high quality)
+    - options: string[] (exactly 4 options)
+    - correctOptionIndex: number (0-indexed, indicating which option is correct)
+    - explanation: string (detailed step-by-step reasoning or mathematical explanation)
+
+    Respond ONLY with the raw JSON string. Do not wrap the JSON in markdown formatting like \`\`\`json \`\`\`.
+  `;
+
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.8,
+      response_format: { type: 'json_object' }
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Groq API error: ${response.status} - ${err}`);
+  }
+
+  const data = await response.json();
+  const rawText = data.choices[0].message.content.trim();
+  const cleanText = rawText.replace(/^```json/, '').replace(/```$/, '').trim();
+  const parsed = JSON.parse(cleanText);
+  const questionsData = parsed.questions as Omit<Question, 'id'>[];
+
+  return questionsData.map((q, idx) => ({
+    ...q,
+    id: `q_groq_${Date.now()}_${idx}`
+  }));
+}
+
 export async function generateMockQuestions(
   subject: string,
   topic: string,
-  count: number = 25
+  count: number = 25,
+  level: number = 1
 ): Promise<Question[]> {
   let normSubject = subject.toLowerCase().replace(/[^a-z]/g, '_');
   if (normSubject === 'quantitative_aptitude') {
     normSubject = 'quant';
   }
   
-  if (!genAI) {
-    // Shuffled Local Procedural Question Compiler (offline mode)
-    const result: Question[] = [];
-    const staticPool = STATIC_FALLBACK_QUESTIONS[normSubject] || STATIC_FALLBACK_QUESTIONS['general_awareness'];
-    const shuffledStatic = shuffleArray(staticPool);
+  const hardnessDesc = 
+    level <= 3 ? "Easy: basic concepts, direct calculations, simple rules." :
+    level <= 6 ? "Medium: double-step calculations, tricky exam patterns, common PO level." :
+    level <= 8 ? "Hard: advanced formulas, multi-variable logic puzzles, higher vocabulary." :
+    "Extremely Hard / SBI PO Mains Level: complex data sets, multi-variable constraints, dense reading.";
 
-    for (let i = 0; i < count; i++) {
-      let qData: Omit<Question, 'id'>;
-      
-      // If we have static questions, use them first to ensure variety
-      if (i < shuffledStatic.length) {
-        qData = shuffledStatic[i];
-      } else {
-        // Otherwise, procedurally compile unique template questions to fill the test
-        if (normSubject === 'quant') {
-          qData = generateProceduralQuantQuestion(i, topic);
-        } else if (normSubject === 'reasoning') {
-          qData = generateProceduralReasoningQuestion(i, topic);
-        } else if (normSubject === 'english') {
-          qData = generateProceduralEnglishQuestion(i, topic);
-        } else if (normSubject === 'general_awareness') {
-          qData = generateProceduralGAGuestion(i, topic);
-        } else if (normSubject === 'computer_awareness') {
-          qData = generateProceduralComputerQuestion(i, topic);
-        } else {
-          // Fallback repeats static pool with index-based variation prefixes
-          const template = shuffledStatic[i % shuffledStatic.length];
-          qData = {
-            questionText: `[Recall Set B-${i+1}] ${template.questionText}`,
-            options: template.options,
-            correctOptionIndex: template.correctOptionIndex,
-            explanation: template.explanation
-          };
-        }
-      }
-      
-      result.push({
-        ...qData,
-        id: `q_fallback_${normSubject}_${Date.now()}_${i}`
-      });
+  // 1. Try Gemini API first if configured
+  if (genAI) {
+    try {
+      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      const prompt = `
+        You are an expert banking exam paper setter for SBI PO / IBPS PO.
+        Generate exactly ${count} multiple choice questions (MCQs) for the topic "${topic}" in the subject "${subject}".
+        The difficulty level is ${level} of 10 (${hardnessDesc}).
+
+        CRITICAL RULES:
+        1. The questions generated MUST belong ONLY to the specific topic "${topic}". Do not include questions from other topics.
+        2. Double check that all questions directly test skills related to "${topic}".
+        3. Vary numerical values, scenarios, and question formats to ensure they are unique.
+        4. Random seed: ${Math.random()}.
+
+        The output MUST be a valid JSON array, containing objects with these exact keys:
+        - questionText: string (the exam question, keep it high quality and realistic)
+        - options: string[] (exactly 4 options)
+        - correctOptionIndex: number (0-indexed, indicating which option is correct)
+        - explanation: string (detailed step-by-step reasoning or mathematical explanation)
+
+        Do not wrap the JSON in markdown formatting like \`\`\`json \`\`\`. Output ONLY the raw JSON string.
+      `;
+
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().trim();
+      const cleanText = text.replace(/^```json/, '').replace(/```$/, '').trim();
+      const questionsData = JSON.parse(cleanText) as Omit<Question, 'id'>[];
+
+      return questionsData.map((q, idx) => ({
+        ...q,
+        id: `q_gemini_${Date.now()}_${idx}`
+      }));
+    } catch (error) {
+      console.error('Error generating questions with Gemini, trying Groq...', error);
     }
-    return result;
   }
 
-  try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const prompt = `
-      You are an expert banking exam paper setter.
-      Generate exactly ${count} multiple choice questions (MCQs) for the topic "${topic}" in the subject "${subject}" for the IBPS PO/SBI PO examination level.
-      The output MUST be a valid JSON array, containing objects with these exact keys:
-      - questionText: string (the exam question, keep it high quality and realistic)
-      - options: string[] (exactly 4 options)
-      - correctOptionIndex: number (0-indexed, indicating which option is correct)
-      - explanation: string (detailed step-by-step reasoning or mathematical explanation)
+  // 2. Try Groq API as failover
+  if (isGroqConfigured) {
+    try {
+      return await generateMockQuestionsWithGroq(subject, topic, count, level);
+    } catch (error) {
+      console.error('Error generating questions with Groq, falling back to local sets:', error);
+    }
+  }
 
-      Do not wrap the JSON in markdown formatting like \`\`\`json \`\`\`. Output ONLY the raw JSON string.
-    `;
+  // 3. Fallback Local compiler if APIs fail or are unconfigured
+  const result: Question[] = [];
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
-    const cleanText = text.replace(/^```json/, '').replace(/```$/, '').trim();
-    const questionsData = JSON.parse(cleanText) as Omit<Question, 'id'>[];
+  // Special mix compilation for offline Full-Length mock test (100 Qs)
+  if (normSubject === 'full_length' || subject === 'Full-Length') {
+    const distribution = [
+      { sub: 'quant', count: 30 },
+      { sub: 'reasoning', count: 30 },
+      { sub: 'english', count: 20 },
+      { sub: 'general_awareness', count: 10 },
+      { sub: 'computer_awareness', count: 10 }
+    ];
+    let qIndex = 0;
+    distribution.forEach(({ sub, count: subCount }) => {
+      const staticPool = STATIC_FALLBACK_QUESTIONS[sub] || STATIC_FALLBACK_QUESTIONS['general_awareness'];
+      const shuffledStatic = shuffleArray(staticPool);
+      
+      for (let i = 0; i < subCount; i++) {
+        let qData: Omit<Question, 'id'>;
+        if (i < shuffledStatic.length) {
+          qData = shuffledStatic[i];
+        } else {
+          if (sub === 'quant') {
+            qData = generateProceduralQuantQuestion(i + level, topic);
+          } else if (sub === 'reasoning') {
+            qData = generateProceduralReasoningQuestion(i + level, topic);
+          } else if (sub === 'english') {
+            qData = generateProceduralEnglishQuestion(i + level, topic);
+          } else if (sub === 'general_awareness') {
+            qData = generateProceduralGAGuestion(i + level, topic);
+          } else {
+            qData = generateProceduralComputerQuestion(i + level, topic);
+          }
+        }
+        result.push({
+          ...qData,
+          id: `q_fallback_full_${sub}_${Date.now()}_${qIndex++}`
+        });
+      }
+    });
+    return result.slice(0, count);
+  }
 
-    return questionsData.map((q, idx) => ({
-      ...q,
-      id: `q_${Date.now()}_${idx}`
-    }));
-  } catch (error) {
-    console.error('Error generating questions with Gemini, falling back to local sets:', error);
+  // Regular single-subject offline fallback
+  const staticPool = STATIC_FALLBACK_QUESTIONS[normSubject] || STATIC_FALLBACK_QUESTIONS['general_awareness'];
+  const shuffledStatic = shuffleArray(staticPool);
+
+  for (let i = 0; i < count; i++) {
+    let qData: Omit<Question, 'id'>;
     
-    // Shuffled Local compiler in case API call fails
-    const result: Question[] = [];
-    const staticPool = STATIC_FALLBACK_QUESTIONS[normSubject] || STATIC_FALLBACK_QUESTIONS['general_awareness'];
-    const shuffledStatic = shuffleArray(staticPool);
-
-    for (let i = 0; i < count; i++) {
-      let qData: Omit<Question, 'id'>;
-      if (i < shuffledStatic.length) {
-        qData = shuffledStatic[i];
+    if (i < shuffledStatic.length) {
+      qData = shuffledStatic[i];
+    } else {
+      const seedIndex = i + level; // dynamic difficulty variation offset
+      if (normSubject === 'quant') {
+        qData = generateProceduralQuantQuestion(seedIndex, topic);
+      } else if (normSubject === 'reasoning') {
+        qData = generateProceduralReasoningQuestion(seedIndex, topic);
+      } else if (normSubject === 'english') {
+        qData = generateProceduralEnglishQuestion(seedIndex, topic);
+      } else if (normSubject === 'general_awareness') {
+        qData = generateProceduralGAGuestion(seedIndex, topic);
+      } else if (normSubject === 'computer_awareness') {
+        qData = generateProceduralComputerQuestion(seedIndex, topic);
       } else {
-        if (normSubject === 'quant') {
-          qData = generateProceduralQuantQuestion(i, topic);
-        } else if (normSubject === 'reasoning') {
-          qData = generateProceduralReasoningQuestion(i, topic);
-        } else if (normSubject === 'english') {
-          qData = generateProceduralEnglishQuestion(i, topic);
-        } else if (normSubject === 'general_awareness') {
-          qData = generateProceduralGAGuestion(i, topic);
-        } else if (normSubject === 'computer_awareness') {
-          qData = generateProceduralComputerQuestion(i, topic);
-        } else {
-          const template = shuffledStatic[i % shuffledStatic.length];
-          qData = {
-            questionText: `[Recall Set B-${i+1}] ${template.questionText}`,
-            options: template.options,
-            correctOptionIndex: template.correctOptionIndex,
-            explanation: template.explanation
-          };
-        }
+        const template = shuffledStatic[i % shuffledStatic.length];
+        qData = {
+          questionText: `[Level ${level} - Chapter Practice Q${i+1}] ${template.questionText}`,
+          options: template.options,
+          correctOptionIndex: template.correctOptionIndex,
+          explanation: template.explanation
+        };
       }
-      result.push({
-        ...qData,
-        id: `q_fallback_err_${Date.now()}_${i}`
-      });
     }
-    return result;
+    
+    result.push({
+      ...qData,
+      id: `q_fallback_${normSubject}_${Date.now()}_${i}`
+    });
   }
+  return result;
 }
 
 export interface RawNewsItem {
@@ -828,7 +934,7 @@ export async function filterCurrentAffairs(rawNewsList: RawNewsItem[]): Promise<
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
     const prompt = `
       Given this list of news articles, filter out any that are irrelevant to a candidate preparing for Indian Banking Exams (SBI PO, IBPS PO, RBI Grade B).
       Prioritize Banking News, Economy News, RBI Updates, Government Schemes, Appointments, Awards, Summits, and Reports & Indexes.
@@ -873,7 +979,7 @@ export async function scrapeNotificationsWithGemini(): Promise<ScrapedNotificati
   if (!genAI) {
     throw new Error("Gemini API not configured");
   }
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   const prompt = `
     You are an expert banking careers scanner.
     Generate/extract the real-world, actual examination notifications for the current year (2026) for the following five organizations in India:
@@ -915,7 +1021,7 @@ export async function scrapeCurrentAffairsWithGemini(): Promise<RawNewsItem[]> {
   if (!genAI) {
     throw new Error("Gemini API not configured");
   }
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
   const prompt = `
     You are an expert financial and banking news scanner.
     Generate/extract 5 high-quality, actual or highly realistic banking, economy, and financial current affairs articles relevant for Indian Banking Exams (SBI PO, IBPS PO, RBI Grade B) in the current year (2026).

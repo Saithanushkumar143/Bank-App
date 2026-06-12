@@ -3,14 +3,14 @@ import { generateMockQuestions } from '@/lib/gemini';
 
 export async function POST(req: NextRequest) {
   try {
-    const { subject, topic, count } = await req.json();
+    const { subject, topic, count, level } = await req.json();
 
     if (!subject || !topic) {
       return NextResponse.json({ error: 'Missing subject or topic' }, { status: 400 });
     }
 
-    // Call dynamic questions compiler helper
-    const questions = await generateMockQuestions(subject, topic, count || 25);
+    // Call dynamic questions compiler helper with level parameter
+    const questions = await generateMockQuestions(subject, topic, count || 25, level || 1);
 
     return NextResponse.json({ questions });
   } catch (error) {

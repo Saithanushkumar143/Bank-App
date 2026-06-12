@@ -13,7 +13,7 @@ import {
   BookOpen,
   Award
 } from 'lucide-react';
-import { useAppStore } from '@/lib/store';
+import { useAppStore, getMilestoneInfo } from '@/lib/store';
 import { 
   ResponsiveContainer, 
   AreaChart, 
@@ -217,13 +217,25 @@ export default function DashboardHome({ setActiveTab }: { setActiveTab: (tab: st
       </header>
 
       {/* Main Title Banner */}
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold text-slate-800 dark:text-white leading-tight mb-1">
-          Aspirant Dashboard & Progress
-        </h2>
-        <p className="text-slate-500 dark:text-slate-400 text-sm">
-          Welcome back, {currentUser?.name || 'Aspirant'}. Track your custom milestones and mock tests.
-        </p>
+      <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 dark:text-white leading-tight mb-1">
+            Aspirant Dashboard & Progress
+          </h2>
+          <p className="text-slate-500 dark:text-slate-400 text-sm">
+            Welcome back, {currentUser?.name || 'Aspirant'}. Track your custom milestones and mock tests.
+          </p>
+        </div>
+        {/* Milestone badge */}
+        {profile && (
+          <div className={`flex items-center gap-2.5 px-4 py-2 rounded-2xl border text-xs font-bold ${getMilestoneInfo(profile.unlockedLevels['Full-Length'] || 1).color} shadow-sm transition`}>
+            <span className="text-xl">{getMilestoneInfo(profile.unlockedLevels['Full-Length'] || 1).badge}</span>
+            <div>
+              <div className="uppercase tracking-wider text-[9px] text-slate-400 dark:text-slate-500">Milestone Rank</div>
+              <div className="text-slate-750 dark:text-slate-200">{getMilestoneInfo(profile.unlockedLevels['Full-Length'] || 1).rank}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 4 Cards Grid - Key Metrics */}

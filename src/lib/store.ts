@@ -1,4 +1,14 @@
 import { create } from 'zustand';
+import { supabase, isSupabaseConfigured } from './supabase';
+
+export interface Handnote {
+  id: string;
+  title: string;
+  content: string;
+  shortcut: string;
+  topic: string;
+  subject: string;
+}
 
 // Predefined accounts
 export const PREDEFINED_ACCOUNTS = [
@@ -92,6 +102,45 @@ export interface MockTestHistory {
   isCleared: boolean;
 }
 
+export interface Milestone {
+  rank: string;
+  badge: string;
+  color: string;
+  desc: string;
+}
+
+export function getMilestoneInfo(level: number): Milestone {
+  if (level <= 2) {
+    return {
+      rank: "Novice Aspirant",
+      badge: "🌱",
+      color: "text-slate-500 bg-slate-100 dark:bg-slate-800 dark:text-slate-450 border-slate-200 dark:border-slate-700",
+      desc: "Starting out. Focus on learning basic topics."
+    };
+  } else if (level <= 5) {
+    return {
+      rank: "Competent Challenger",
+      badge: "🎯",
+      color: "text-blue-600 bg-blue-50 dark:bg-blue-950/20 dark:text-blue-400 border-blue-200 dark:border-blue-900",
+      desc: "Basic concepts mastered. Keep practicing level quizzes."
+    };
+  } else if (level <= 8) {
+    return {
+      rank: "Exam Ready (PO Level)",
+      badge: "🏆",
+      color: "text-amber-600 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-450 border-amber-250 dark:border-amber-900",
+      desc: "Clearing competitive PO level questions. Ready for real mocks."
+    };
+  } else {
+    return {
+      rank: "Banking Master",
+      badge: "👑",
+      color: "text-purple-600 bg-purple-50 dark:bg-purple-950/20 dark:text-purple-400 border-purple-250 dark:border-purple-900",
+      desc: "Highest mastery levels cleared. Excellent work!"
+    };
+  }
+}
+
 export interface UserProfileState {
   email: string;
   bookmarks: {
@@ -112,6 +161,7 @@ export interface UserProfileState {
   mockTestHistory: MockTestHistory[];
   reminders: Reminder[];
   preferences: UserPreferences;
+  likedFormulas: Handnote[];
 }
 
 interface AppState {
@@ -153,6 +203,7 @@ interface AppState {
   addReminder: (reminder: Omit<Reminder, 'id' | 'triggered'>) => void;
   removeReminder: (id: string) => void;
   clearUserProfileData: (email: string) => void;
+  toggleLikeFormula: (formula: Handnote) => void;
 }
 
 // Initial state helpers
@@ -182,7 +233,8 @@ const getInitialProfile = (email: string): UserProfileState => ({
   },
   mockTestHistory: [],
   reminders: [],
-  preferences: DEFAULT_PREFERENCES
+  preferences: DEFAULT_PREFERENCES,
+  likedFormulas: []
 });
 
 const DEFAULT_NOTIFICATIONS: ExamNotification[] = [
@@ -437,12 +489,41 @@ const generateSmartReminders = (profile: UserProfileState, notifications: ExamNo
   return [...manualReminders, ...autoReminders];
 };
 
+// Helper to sync user profile state to Supabase in the background
+export async function saveProfileToSupabase(profile: UserProfileState) {
+  if (!isSupabaseConfigured || !supabase) return;
+  try {
+    const { error } = await supabase
+      .from('user_profiles_data')
+      .upsert({
+        email: profile.email.toLowerCase(),
+        unlocked_levels: profile.unlockedLevels,
+        roadmap_progress: profile.roadmapProgress,
+        bookmarks: profile.bookmarks,
+        preferences: profile.preferences,
+        mock_test_history: profile.mockTestHistory,
+        reminders: profile.reminders,
+        liked_formulas: profile.likedFormulas,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'email' });
+      
+    if (error) {
+      console.error('Error syncing profile to Supabase:', error.message);
+    }
+  } catch (err) {
+    console.error('Supabase connection error:', err);
+  }
+}
+
 export const useAppStore = create<AppState>((set, get) => {
   // Client-side initialization loading from localstorage
   const isClient = typeof window !== 'undefined';
   
   const initialProfiles: Record<string, UserProfileState> = {};
   let initialUser: { email: string; name: string } | null = null;
+  let initialNotifications = DEFAULT_NOTIFICATIONS;
+  let initialJobs = DEFAULT_JOBS;
+  let initialCA = DEFAULT_CURRENT_AFFAIRS;
 
   if (isClient) {
     try {
@@ -451,6 +532,19 @@ export const useAppStore = create<AppState>((set, get) => {
         initialUser = JSON.parse(activeUserStr);
       }
       
+      const storedNotifs = localStorage.getItem('banking_companion_notifications');
+      if (storedNotifs) {
+        initialNotifications = JSON.parse(storedNotifs);
+      }
+      const storedJobs = localStorage.getItem('banking_companion_jobs');
+      if (storedJobs) {
+        initialJobs = JSON.parse(storedJobs);
+      }
+      const storedCA = localStorage.getItem('banking_companion_current_affairs');
+      if (storedCA) {
+        initialCA = JSON.parse(storedCA);
+      }
+
       PREDEFINED_ACCOUNTS.forEach(acc => {
         const stored = localStorage.getItem(`banking_companion_state_${acc.email.replace(/[@.]/g, '_')}`);
         if (stored) {
@@ -474,9 +568,9 @@ export const useAppStore = create<AppState>((set, get) => {
   return {
     currentUser: initialUser,
     userProfiles: initialProfiles,
-    notifications: DEFAULT_NOTIFICATIONS,
-    jobs: DEFAULT_JOBS,
-    currentAffairs: DEFAULT_CURRENT_AFFAIRS,
+    notifications: initialNotifications,
+    jobs: initialJobs,
+    currentAffairs: initialCA,
     roadmapStructure: ROADMAP_TOPICS_LIST,
     lastSyncedAt: isClient ? localStorage.getItem('banking_companion_last_synced') : null,
     isSyncing: false,
@@ -497,6 +591,60 @@ export const useAppStore = create<AppState>((set, get) => {
         // Generate automatic reminders on login
         const state = get();
         const profile = state.userProfiles[account.email];
+        
+        // Fetch from Supabase in the background to sync cloud state
+        if (isSupabaseConfigured && supabase) {
+          (async () => {
+            try {
+              const { data, error } = await supabase
+                .from('user_profiles_data')
+                .select('*')
+                .eq('email', account.email.toLowerCase())
+                .single();
+
+              if (data && !error) {
+                const updatedProfile: UserProfileState = {
+                  email: account.email,
+                  bookmarks: data.bookmarks || { notifications: [], jobs: [], currentAffairs: [], roadmapTopics: [] },
+                  roadmapProgress: data.roadmap_progress || {},
+                  unlockedLevels: data.unlocked_levels || {
+                    'Full-Length': 1,
+                    'Quantitative Aptitude': 1,
+                    'Reasoning': 1,
+                    'English': 1,
+                    'General Awareness': 1,
+                    'Computer Awareness': 1
+                  },
+                  mockTestHistory: data.mock_test_history || [],
+                  reminders: data.reminders || [],
+                  preferences: data.preferences || DEFAULT_PREFERENCES,
+                  likedFormulas: data.liked_formulas || []
+                };
+
+                const stateNow = get();
+                const mergedReminders = generateSmartReminders(updatedProfile, stateNow.notifications);
+                const finalProfile = { ...updatedProfile, reminders: mergedReminders };
+
+                set({
+                  userProfiles: {
+                    ...stateNow.userProfiles,
+                    [account.email]: finalProfile
+                  }
+                });
+
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem(
+                    `banking_companion_state_${account.email.replace(/[@.]/g, '_')}`,
+                    JSON.stringify(finalProfile)
+                  );
+                }
+              }
+            } catch (err) {
+              console.error('Error fetching profile from Supabase:', err);
+            }
+          })();
+        }
+
         if (profile) {
           const updatedReminders = generateSmartReminders(profile, state.notifications);
           const updatedProfile = {
@@ -513,6 +661,9 @@ export const useAppStore = create<AppState>((set, get) => {
               `banking_companion_state_${account.email.replace(/[@.]/g, '_')}`,
               JSON.stringify(updatedProfile)
             );
+          }
+          if (isSupabaseConfigured) {
+            saveProfileToSupabase(updatedProfile);
           }
         }
 
@@ -569,6 +720,9 @@ export const useAppStore = create<AppState>((set, get) => {
           JSON.stringify(updatedProfile)
         );
       }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
+      }
     },
 
     toggleBookmark: (type, id) => {
@@ -603,6 +757,9 @@ export const useAppStore = create<AppState>((set, get) => {
           JSON.stringify(updatedProfile)
         );
       }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
+      }
     },
 
     updateRoadmapTopicStatus: (topicId, status) => {
@@ -631,6 +788,9 @@ export const useAppStore = create<AppState>((set, get) => {
           `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
           JSON.stringify(updatedProfile)
         );
+      }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
       }
     },
 
@@ -714,6 +874,9 @@ export const useAppStore = create<AppState>((set, get) => {
           JSON.stringify(updatedProfile)
         );
       }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
+      }
     },
 
     syncData: async () => {
@@ -745,6 +908,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
           if (typeof window !== 'undefined') {
             localStorage.setItem('banking_companion_last_synced', new Date().toISOString());
+            localStorage.setItem('banking_companion_notifications', JSON.stringify(mergedNotifications));
+            localStorage.setItem('banking_companion_jobs', JSON.stringify(mergedJobs));
+            localStorage.setItem('banking_companion_current_affairs', JSON.stringify(mergedCA));
           }
 
           // Regenerate smart reminders for active user with new notifications
@@ -767,6 +933,9 @@ export const useAppStore = create<AppState>((set, get) => {
                 `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
                 JSON.stringify(updatedProfile)
               );
+              if (isSupabaseConfigured) {
+                saveProfileToSupabase(updatedProfile);
+              }
             }
           }
         }
@@ -807,6 +976,9 @@ export const useAppStore = create<AppState>((set, get) => {
           JSON.stringify(updatedProfile)
         );
       }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
+      }
     },
 
     removeReminder: (id) => {
@@ -833,6 +1005,9 @@ export const useAppStore = create<AppState>((set, get) => {
           JSON.stringify(updatedProfile)
         );
       }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
+      }
     },
 
     clearUserProfileData: (email) => {
@@ -848,6 +1023,43 @@ export const useAppStore = create<AppState>((set, get) => {
           `banking_companion_state_${email.replace(/[@.]/g, '_')}`,
           JSON.stringify(initialProfile)
         );
+      }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(initialProfile);
+      }
+    },
+    
+    toggleLikeFormula: (formula) => {
+      const { currentUser, userProfiles } = get();
+      if (!currentUser) return;
+
+      const userEmail = currentUser.email;
+      const profile = userProfiles[userEmail];
+      const currentLikes = profile.likedFormulas || [];
+      const exists = currentLikes.some(f => f.id === formula.id);
+      const newLikes = exists
+        ? currentLikes.filter(f => f.id !== formula.id)
+        : [...currentLikes, formula];
+
+      const updatedProfile = {
+        ...profile,
+        likedFormulas: newLikes
+      };
+
+      const updatedProfiles = {
+        ...userProfiles,
+        [userEmail]: updatedProfile
+      };
+
+      set({ userProfiles: updatedProfiles });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(
+          `banking_companion_state_${userEmail.replace(/[@.]/g, '_')}`,
+          JSON.stringify(updatedProfile)
+        );
+      }
+      if (isSupabaseConfigured) {
+        saveProfileToSupabase(updatedProfile);
       }
     }
   };

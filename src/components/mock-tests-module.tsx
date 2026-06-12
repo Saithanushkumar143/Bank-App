@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useAppStore, MockTestHistory } from '@/lib/store';
+import { useAppStore, MockTestHistory, getMilestoneInfo } from '@/lib/store';
 import { generateMockQuestions, Question } from '@/lib/gemini';
 import { 
   Award, 
@@ -64,6 +64,7 @@ export default function MockTestsModule() {
   const [answers, setAnswers] = useState<Record<number, number>>({});
   const [markedForReview, setMarkedForReview] = useState<number[]>([]);
   const [timeLeft, setTimeLeft] = useState(1200); // 20 minutes
+  const [runnerSectionFilter, setRunnerSectionFilter] = useState<'ALL' | 'Quant' | 'Reasoning' | 'English' | 'GA' | 'Computer'>('ALL');
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Result display state
@@ -94,7 +95,9 @@ export default function MockTestsModule() {
     ? (profile.unlockedLevels['Full-Length'] || 1)
     : (profile.unlockedLevels[activeCategory] || 1);
 
-  const levels = Array.from({ length: 10 }, (_, i) => i + 1); // 10 Levels total
+  const milestone = getMilestoneInfo(unlockedLevel);
+  const levelsCount = Math.max(10, unlockedLevel + 2);
+  const levels = Array.from({ length: levelsCount }, (_, i) => i + 1); // Open-ended levels based on progress
 
   const availableTopics = roadmapStructure.filter(t => t.subject === activeCategory);
 
@@ -114,7 +117,8 @@ export default function MockTestsModule() {
     topic?: string;
     level?: number;
   }) => {
-    setSelectedLevel(options.level || 1);
+    const levelParam = options.level || 1;
+    setSelectedLevel(levelParam);
     setSelectedTopic(options.topic || '');
     setCurrentTestConfig(options);
     setLoadingQuestions(true);
@@ -123,10 +127,62 @@ export default function MockTestsModule() {
     setAnswers({});
     setMarkedForReview([]);
     setCurrentQuestionIndex(0);
-    setTimeLeft(1200); // 20 minutes
+    setRunnerSectionFilter('ALL');
+    
+    // 60 minutes for 100-Q Full-Length, 20 minutes for 25-Q Subject/Topic tests
+    const durationSeconds = options.type === 'Full-Length' ? 3600 : 1200;
+    setTimeLeft(durationSeconds);
 
-    const subjectParam = options.type === 'Full-Length' ? 'Full-Length' : (options.subject || 'Quantitative Aptitude');
-    const topicParam = options.type === 'Topic' ? (options.topic || '') : `Level ${options.level || 1} Mock Test`;
+    if (options.type === 'Full-Length') {
+      try {
+        const subjectsList = [
+          { name: 'Quantitative Aptitude', count: 30, code: 'Quant' },
+          { name: 'Reasoning', count: 30, code: 'Reasoning' },
+          { name: 'English', count: 20, code: 'English' },
+          { name: 'General Awareness', count: 10, code: 'GA' },
+          { name: 'Computer Awareness', count: 10, code: 'Computer' }
+        ];
+
+        // Concurrently fetch each subject's questions
+        const fetchPromises = subjectsList.map(async (sub) => {
+          const res = await fetch('/api/generate-test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subject: sub.name,
+              topic: `Level ${levelParam} Full-Length Mock`,
+              count: sub.count,
+              level: levelParam
+            })
+          });
+          if (!res.ok) throw new Error(`Failed to fetch ${sub.name}`);
+          const data = await res.json();
+          return data.questions.map((q: any) => ({ ...q, subject: sub.code }));
+        });
+
+        const results = await Promise.all(fetchPromises);
+        const mergedQuestions = results.flat();
+        
+        if (mergedQuestions.length > 0) {
+          setQuestions(mergedQuestions);
+          setIsExamActive(true);
+        } else {
+          throw new Error('No questions generated');
+        }
+      } catch (err) {
+        console.error('Error starting Full-Length exam, using offline fallback', err);
+        const fallbackQs = await generateMockQuestions('Full-Length', `Level ${levelParam} Mock Test`, 100, levelParam);
+        setQuestions(fallbackQs);
+        setIsExamActive(true);
+      } finally {
+        setLoadingQuestions(false);
+      }
+      return;
+    }
+
+    // Single-Subject or Topic test (25 questions)
+    const subjectParam = options.type === 'Topic' ? (options.subject || 'Quantitative Aptitude') : (options.subject || 'Quantitative Aptitude');
+    const topicParam = options.type === 'Topic' ? (options.topic || '') : `Level ${levelParam} Mock Test`;
 
     try {
       const response = await fetch('/api/generate-test', {
@@ -135,7 +191,8 @@ export default function MockTestsModule() {
         body: JSON.stringify({
           subject: subjectParam,
           topic: topicParam,
-          count: 25
+          count: 25,
+          level: levelParam
         })
       });
 
@@ -149,7 +206,7 @@ export default function MockTestsModule() {
     } catch (err) {
       console.error('Error starting exam, using client side backup questions', err);
       // Fallback local generator in case API server fails
-      const fallbackQs = await generateMockQuestions(subjectParam, topicParam, 25);
+      const fallbackQs = await generateMockQuestions(subjectParam, topicParam, 25, levelParam);
       setQuestions(fallbackQs);
       setIsExamActive(true);
     } finally {
@@ -283,10 +340,17 @@ export default function MockTestsModule() {
         <>
           <div className="mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                <Award className="h-6 w-6 text-blue-600" /> Mock Test Prep Center
-              </h2>
-              <p className="text-slate-500 dark:text-slate-400 text-sm mt-0.5">
+              <div className="flex items-center gap-3 flex-wrap">
+                <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                  <Award className="h-6 w-6 text-blue-600" /> Mock Test Prep Center
+                </h2>
+                {/* Milestone Badge */}
+                <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-[11px] font-bold ${milestone.color} shadow-sm transition`}>
+                  <span>{milestone.badge}</span>
+                  <span>{milestone.rank}</span>
+                </div>
+              </div>
+              <p className="text-slate-500 dark:text-slate-400 text-sm mt-1.5">
                 Lock and unlock exam levels by scoring 60% or higher. Take topic-specific quizzes procedurally compiled by AI.
               </p>
             </div>
@@ -559,8 +623,33 @@ export default function MockTestsModule() {
           <div className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-850 p-5 rounded-2xl shadow-sm flex flex-col justify-between">
             <div>
               <h3 className="font-bold text-slate-850 dark:text-white text-sm mb-4">Question Progress Map</h3>
+              
+              {currentTestConfig?.type === 'Full-Length' && (
+                <div className="flex flex-wrap gap-1 mb-4 text-[9px] font-bold">
+                  {(['ALL', 'Quant', 'Reasoning', 'English', 'GA', 'Computer'] as const).map(sec => (
+                    <button
+                      key={sec}
+                      onClick={() => setRunnerSectionFilter(sec)}
+                      className={`px-2 py-1 rounded transition cursor-pointer flex-1 text-center ${
+                        runnerSectionFilter === sec 
+                          ? 'bg-blue-600 text-white' 
+                          : 'bg-slate-100 dark:bg-slate-900 text-slate-600 dark:text-slate-350 hover:bg-slate-200 dark:hover:bg-slate-750'
+                      }`}
+                    >
+                      {sec}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="grid grid-cols-5 gap-2 text-xs">
-                {questions.map((_, idx) => {
+                {questions.map((q, idx) => {
+                  // Subject section filtering for 100-Q Mock
+                  const qSubject = (q as any).subject || '';
+                  if (currentTestConfig?.type === 'Full-Length' && runnerSectionFilter !== 'ALL' && qSubject !== runnerSectionFilter) {
+                    return null;
+                  }
+
                   const isCurrent = currentQuestionIndex === idx;
                   const isAnswered = answers[idx] !== undefined;
                   const isMarked = markedForReview.includes(idx);
