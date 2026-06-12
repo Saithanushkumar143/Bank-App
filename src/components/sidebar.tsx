@@ -138,6 +138,17 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: Si
             </div>
           </div>
 
+          {/* Admin Dashboard Link */}
+          {currentUser?.role === 'admin' && (
+            <a
+              href="/admin"
+              className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-bold text-blue-600 bg-blue-50/50 hover:bg-blue-50 dark:text-blue-400 dark:bg-blue-950/20 dark:hover:bg-blue-950/30 border border-blue-100 dark:border-blue-900/30 transition duration-200 cursor-pointer"
+            >
+              <Sparkles className="h-4 w-4 text-blue-600" />
+              <span>Admin Dashboard</span>
+            </a>
+          )}
+
           {/* Theme Toggler */}
           <button
             onClick={toggleTheme}

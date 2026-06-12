@@ -218,6 +218,12 @@ export async function generateWaterfallQuestions(
             topic: data.topic,
             difficulty: data.difficulty
           });
+        } else {
+          console.warn("Could not save generated question to database (using in-memory fallback):", error?.message);
+          savedQuestions.push({
+            ...q,
+            id: q.id || `temp_${Math.random().toString(36).substring(2, 11)}`
+          });
         }
       } else {
         // If it is a duplicate, we will still serve it, but not insert again

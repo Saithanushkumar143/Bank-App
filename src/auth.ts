@@ -1,41 +1,16 @@
 import NextAuth from "next-auth"
 import Credentials from "next-auth/providers/credentials"
-import Google from "next-auth/providers/google"
 import { supabase } from "@/lib/supabase"
 import { headers } from "next/headers"
 
-// Helper to generate a stable, secure password for Google/OAuth users
-async function getGeneratedPassword(email: string): Promise<string> {
-  const secret = process.env.NEXTAUTH_SECRET || 'default-secret-for-oauth-bridge-32-chars';
-  const encoder = new TextEncoder();
-  const keyData = encoder.encode(secret);
-  const messageData = encoder.encode(email.toLowerCase());
-
-  const key = await crypto.subtle.importKey(
-    "raw",
-    keyData,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signature = await crypto.subtle.sign("HMAC", key, messageData);
-  const hashArray = Array.from(new Uint8Array(signature));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID || process.env.GOOGLE_CLIENT_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET || process.env.GOOGLE_CLIENT_SECRET,
-    }),
     Credentials({
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        role: { label: "Role", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
@@ -44,6 +19,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         
         const email = String(credentials.email).toLowerCase().trim()
         const password = String(credentials.password)
+        const requestedRole = credentials.role ? String(credentials.role).toLowerCase().trim() : undefined
+
+        // Predefined static user credentials
+        const user1Email = 'yegotisaithanushkumar143@gmail.com'
+        const user2Email = 'vyshnavirayapudi86@gmail.com'
+        const user1Password = process.env.NEXT_PUBLIC_USER_1_PASSWORD || 'bankpass123'
+        const user2Password = process.env.NEXT_PUBLIC_USER_2_PASSWORD || 'vyshnavi123'
+
+        if (email !== user1Email && email !== user2Email) {
+          throw new Error("Access restricted. Only pre-configured static users can log in.")
+        }
+
+        const isUser1 = email === user1Email
+        const expectedPassword = isUser1 ? user1Password : user2Password
+
+        if (password !== expectedPassword) {
+          throw new Error("Invalid password.")
+        }
+
+        // Determine target role (Thanush can log in as admin or student)
+        let targetRole = "student"
+        if (isUser1) {
+          targetRole = requestedRole === "student" ? "student" : "admin"
+        }
 
         // Rate limiting: max 5 attempts per IP per 15 minutes
         let ip = "127.0.0.1"
@@ -90,15 +89,56 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         // Sign in using Supabase Auth to verify credentials and obtain a valid session access token
-        const { data, error } = await supabase.auth.signInWithPassword({
+        let { data, error } = await supabase.auth.signInWithPassword({
           email,
           password
         })
 
+        // If user does not exist in Supabase Auth, register them automatically
+        if (error && error.message.includes("Invalid login credentials")) {
+          console.log(`User ${email} not found in Supabase Auth. Attempting auto-registration...`)
+          
+          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+              data: {
+                name: isUser1 ? "Thanush" : "Vyshnavi Rayapudi",
+                role: targetRole,
+              }
+            }
+          })
+
+          if (signUpError) {
+            console.error("Auto-registration failed:", signUpError.message)
+            if (signUpError.message.includes("rate limit") || signUpError.status === 429) {
+              throw new Error("Email rate limit exceeded. Please create this user manually in the Supabase Dashboard and check 'Auto-confirm user', or disable 'Confirm email' under Providers -> Email.")
+            } else {
+              throw new Error(`Auto-registration failed: ${signUpError.message}. Please configure this user in your Supabase Auth dashboard.`)
+            }
+          }
+
+          // Registration succeeded or email sent. Try to sign in again.
+          const retry = await supabase.auth.signInWithPassword({
+            email,
+            password
+          })
+
+          if (retry.error) {
+            console.error("Sign in failed after auto-registration:", retry.error.message)
+            if (retry.error.message.includes("Email not confirmed")) {
+              throw new Error("User created, but email confirmation is required. Please disable 'Confirm email' in your Supabase Dashboard under Authentication -> Providers -> Email, or click the confirmation link sent to your email.")
+            }
+            throw new Error(`Auto-registration succeeded, but login failed: ${retry.error.message}. Please verify the user in the Supabase Dashboard.`)
+          }
+
+          data = retry.data
+          error = null
+        }
+
         if (error || !data.user || !data.session) {
           console.error("Supabase credentials login error:", error?.message)
-          // Keep rate limit count going up
-          return null
+          throw new Error(error?.message || "Authentication failed.")
         }
 
         // Reset rate limit count on successful login
@@ -114,81 +154,31 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           .eq("id", data.user.id)
           .single()
 
+        // Sync local requested role (Thanush admin/student toggling) to public.users table if different
+        if (dbUser && dbUser.role !== targetRole) {
+          await supabase
+            .from("users")
+            .update({ role: targetRole })
+            .eq("id", data.user.id)
+        }
+
         return {
           id: data.user.id,
           email: data.user.email,
-          name: dbUser?.name || data.user.user_metadata?.name || email.split('@')[0],
-          role: dbUser?.role || "student",
+          name: isUser1 ? "Thanush" : "Vyshnavi Rayapudi",
+          role: targetRole,
           supabaseAccessToken: data.session.access_token,
         }
       },
     }),
   ],
   callbacks: {
-    async jwt({ token, user, account }) {
-      // For Credentials provider sign in
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id
         token.role = (user as any).role || "student"
         token.supabaseAccessToken = (user as any).supabaseAccessToken || null
       }
-
-      // For Google OAuth sign in
-      if (account?.provider === "google" && token.email) {
-        const email = token.email.toLowerCase()
-        const name = token.name || email.split('@')[0]
-        const securePassword = await getGeneratedPassword(email)
-
-        // Try to log in the Google user to Supabase Auth first
-        let { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password: securePassword
-        })
-
-        // If user does not exist in Supabase Auth, register them
-        if (error && error.message.includes("Invalid login credentials")) {
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-            email,
-            password: securePassword,
-            options: {
-              data: {
-                name,
-                role: "student",
-                avatar_url: token.picture || null
-              }
-            }
-          })
-
-          if (!signUpError && signUpData.user) {
-            // Immediately sign in to get the access token
-            const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-              email,
-              password: securePassword
-            })
-            if (!signInError && signInData.session) {
-              data = signInData
-              error = null
-            }
-          } else {
-            console.error("Supabase Auth registration error for Google OAuth:", signUpError?.message)
-          }
-        }
-
-        if (!error && data?.user && data?.session) {
-          token.id = data.user.id
-          token.supabaseAccessToken = data.session.access_token
-          
-          // Get public profile details
-          const { data: dbUser } = await supabase
-            .from("users")
-            .select("*")
-            .eq("id", data.user.id)
-            .single()
-            
-          token.role = dbUser?.role || "student"
-        }
-      }
-
       return token
     },
     async session({ session, token }) {

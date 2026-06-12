@@ -1,5 +1,8 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { generateWaterfallQuestions } from './question-generator';
+import { Question, RawNewsItem, ScrapedNotification } from '@/types/gemini';
+
+export type { Question, RawNewsItem, ScrapedNotification };
 
 const apiKey = process.env.GEMINI_API_KEY || '';
 const apiKeySecondary = process.env.GEMINI_API_KEY_SECONDARY || '';
@@ -13,16 +16,7 @@ export const isGroqConfigured = !!groqApiKey && !groqApiKey.includes('PLACEHOLDE
 export const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
 export const genAISecondary = apiKeySecondary ? new GoogleGenerativeAI(apiKeySecondary) : null;
 
-export interface Question {
-  id: string;
-  questionText: string;
-  options: string[];
-  correctOptionIndex: number;
-  explanation: string;
-  subject?: string;
-  topic?: string;
-  difficulty?: number;
-}
+
 
 // Wrapper function to direct all question requests to the dynamic waterfall generator
 export async function generateMockQuestions(
@@ -35,15 +29,7 @@ export async function generateMockQuestions(
   return result as Question[];
 }
 
-export interface RawNewsItem {
-  id: string;
-  category: string;
-  title: string;
-  content: string;
-  summary: string;
-  publishedAt: string;
-  sourceUrl: string;
-}
+
 
 /**
  * Unified helper to generate content with fallback/waterfall:
@@ -131,27 +117,7 @@ export async function filterCurrentAffairs(rawNewsList: RawNewsItem[]): Promise<
   }
 }
 
-export interface ScrapedNotification {
-  id: string;
-  organization: string;
-  title: string;
-  pdfUrl: string;
-  vacancyCount: number;
-  eligibility: string;
-  importantDates: {
-    notificationRelease: string;
-    registrationStart: string;
-    registrationEnd: string;
-    feeDeadline: string;
-    admitCardRelease: string;
-    examDate: string;
-    resultDate: string;
-    interviewDate?: string;
-    finalSelectionDate?: string;
-  };
-  officialWebsite: string;
-  created_at?: string;
-}
+
 
 export async function scrapeNotificationsWithGemini(): Promise<ScrapedNotification[]> {
   const prompt = `

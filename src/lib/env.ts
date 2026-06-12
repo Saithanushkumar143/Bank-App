@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const envSchema = z.object({
-  GEMINI_API_KEY: typeof window === 'undefined' ? z.string().min(1) : z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
   NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
   NEXTAUTH_SECRET: z.string().default('development-secret-key-at-least-32-chars'),

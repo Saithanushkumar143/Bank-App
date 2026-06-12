@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useAppStore, CurrentAffairsArticle } from '@/lib/store';
-import { Question } from '@/lib/gemini';
+import { Question } from '@/types/gemini';
 import { 
   BookOpen, 
   Search, 

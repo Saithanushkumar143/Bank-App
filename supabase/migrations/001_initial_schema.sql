@@ -332,37 +332,3 @@ CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
 
--- Seed Predefined Users in auth.users (trigger will automatically create public.users and user_preferences rows)
--- Predefined 1: Thanush (yegotisaithanushkumar143@gmail.com / bankpass123)
-INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
-VALUES (
-  '00000000-0000-0000-0000-000000000000',
-  '11111111-1111-1111-1111-111111111111',
-  'authenticated',
-  'authenticated',
-  'yegotisaithanushkumar143@gmail.com',
-  -- Hashed password for bankpass123
-  '$2a$10$w8.3f6/9ZqJlhG8bU5Xy.Ozq2.W1M3H6KvxPpyZJ1d3t2JgVbL8uK',
-  now(),
-  '{"provider":"email","providers":["email"]}',
-  '{"name":"Thanush", "role":"admin"}',
-  now(),
-  now()
-) ON CONFLICT (id) DO NOTHING;
-
--- Predefined 2: Vyshnavi Rayapudi (vyshnavirayapudi86@gmail.com / vyshnavi123)
-INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
-VALUES (
-  '00000000-0000-0000-0000-000000000000',
-  '22222222-2222-2222-2222-222222222222',
-  'authenticated',
-  'authenticated',
-  'vyshnavirayapudi86@gmail.com',
-  -- Hashed password for vyshnavi123
-  '$2a$10$T53J1/O8R4pB9qI/dZfP2exY4y5h2yVq2Xz7Qo/fE0i1R2R5H7PqS',
-  now(),
-  '{"provider":"email","providers":["email"]}',
-  '{"name":"Vyshnavi Rayapudi", "role":"student"}',
-  now(),
-  now()
-) ON CONFLICT (id) DO NOTHING;

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, MockTestHistory, getMilestoneInfo } from '@/lib/store';
-import { generateMockQuestions, Question } from '@/lib/gemini';
+import { Question } from '@/types/gemini';
 import { createClient } from '@supabase/supabase-js';
 import { 
   Award, 
