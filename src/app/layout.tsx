@@ -38,24 +38,11 @@ export default function RootLayout({
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                  if (window.location.hostname === 'localhost') {
-                    navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                      for (let registration of registrations) {
-                        registration.unregister().then(function(boolean) {
-                          if (boolean) {
-                            console.log('SW unregistered successfully for localhost development');
-                            window.location.reload();
-                          }
-                        });
-                      }
-                    });
-                  } else {
-                    navigator.serviceWorker.register('/sw.js').then(function(reg) {
-                      console.log('SW registered:', reg.scope);
-                    }).catch(function(err) {
-                      console.log('SW registration failed:', err);
-                    });
-                  }
+                  navigator.serviceWorker.register('/sw.js').then(function(reg) {
+                    console.log('SW registered:', reg.scope);
+                  }).catch(function(err) {
+                    console.log('SW registration failed:', err);
+                  });
                 });
               }
             `

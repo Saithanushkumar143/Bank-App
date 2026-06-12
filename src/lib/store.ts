@@ -186,6 +186,9 @@ export interface SessionUser {
 }
 
 interface AppState {
+  // PWA Install State
+  canInstall: boolean;
+
   // Authentication & Session
   currentUser: SessionUser | null;
   setCurrentUser: (user: SessionUser | null) => Promise<void>;
@@ -533,6 +536,7 @@ export const useAppStore = create<AppState>((set, get) => {
   }
 
   return {
+    canInstall: false,
     currentUser: null,
     userProfiles: {},
     notifications: initialNotifications,

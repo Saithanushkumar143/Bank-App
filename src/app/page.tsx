@@ -99,6 +99,36 @@ export default function RootPage() {
     return () => clearTimeout(timer);
   }, []);
 
+  // Listen for beforeinstallprompt for PWA installation
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      (window as any).deferredInstallPrompt = e;
+      useAppStore.setState({ canInstall: true });
+    };
+
+    const handleAppInstalled = () => {
+      (window as any).deferredInstallPrompt = null;
+      useAppStore.setState({ canInstall: false });
+      console.log('PWA installed successfully');
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    // If PWA is already running in standalone display mode, hide install trigger
+    if (typeof window !== 'undefined') {
+      if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone) {
+        useAppStore.setState({ canInstall: false });
+      }
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
   // If not mounted or session loading, render loading spinner
   if (!mounted || status === 'loading' || (status === 'authenticated' && !currentUser)) {
     return (

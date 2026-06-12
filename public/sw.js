@@ -4,7 +4,7 @@ const OFFLINE_URL = '/offline.html';
 const ASSETS_TO_CACHE = [
   OFFLINE_URL,
   '/manifest.json',
-  '/icon.svg'
+  '/logo.png'
 ];
 
 // Install Service Worker and pre-cache essential assets
@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
         return networkResponse;
       }).catch(() => {
         // Fallback for missing images/assets
-        return caches.match('/icon.svg') || Response.error();
+        return caches.match('/logo.png') || Response.error();
       });
     })
   );

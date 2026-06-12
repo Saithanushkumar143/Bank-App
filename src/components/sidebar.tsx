@@ -17,7 +17,8 @@ import {
   Sun,
   Moon,
   X,
-  Brain
+  Brain,
+  Download
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
 
@@ -31,6 +32,7 @@ interface SidebarProps {
 export default function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: SidebarProps) {
   const logout = useAppStore((state) => state.logout);
   const currentUser = useAppStore((state) => state.currentUser);
+  const canInstall = useAppStore((state) => state.canInstall);
   const toggleTheme = useAppStore((state) => state.toggleTheme);
   const profile = useAppStore((state) => state.userProfiles[currentUser?.email || '']) || {
     preferences: { theme: 'light' }
@@ -147,6 +149,25 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onClose }: Si
               <Sparkles className="h-4 w-4 text-blue-600" />
               <span>Admin Dashboard</span>
             </a>
+          )}
+
+          {/* Install PWA Button */}
+          {canInstall && (
+            <button
+              onClick={async () => {
+                const promptEvent = (window as any).deferredInstallPrompt;
+                if (!promptEvent) return;
+                promptEvent.prompt();
+                const { outcome } = await promptEvent.userChoice;
+                console.log(`User response to the install prompt: ${outcome}`);
+                (window as any).deferredInstallPrompt = null;
+                useAppStore.setState({ canInstall: false });
+              }}
+              className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-bold text-emerald-600 bg-emerald-50/50 hover:bg-emerald-50 dark:text-emerald-400 dark:bg-emerald-950/20 dark:hover:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/30 transition duration-200 cursor-pointer"
+            >
+              <Download className="h-4 w-4 text-emerald-600" />
+              <span>Install App</span>
+            </button>
           )}
 
           {/* Theme Toggler */}
