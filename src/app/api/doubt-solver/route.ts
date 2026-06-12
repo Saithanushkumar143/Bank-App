@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { generateContentWithFallback, isGeminiConfigured, isGroqConfigured } from "@/lib/gemini";
 import { auth } from "@/auth";
 import { createClient } from "@supabase/supabase-js";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -57,19 +57,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Initialize Gemini API client
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    // 3. Initialize Fallback API client check
+    if (!isGeminiConfigured && !isGroqConfigured) {
       return NextResponse.json(
         { error: "AI service is not configured on the server.", code: "CONFIG_ERROR" },
         { status: 500 }
       );
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-    // 4. Call Gemini with strict system instructions and context
+    // 4. Call AI with strict system instructions and context
     const systemPrompt = `
       You are an expert, friendly, and encouraging AI banking exam tutor for Indian Banking Exams (SBI PO, IBPS PO, RBI Grade B, NABARD Grade A, LIC AAO).
       
@@ -88,8 +84,7 @@ export async function POST(req: NextRequest) {
       User Question: "${question}"
     `;
 
-    const result = await model.generateContent(systemPrompt);
-    const botResponse = result.response.text().trim();
+    const botResponse = (await generateContentWithFallback(systemPrompt)).trim();
 
     // 5. Connect typed Supabase client using user token to satisfy RLS policies
     const client = getClientSupabase(supabaseToken);
