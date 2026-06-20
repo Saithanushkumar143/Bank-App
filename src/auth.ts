@@ -168,6 +168,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           name: isUser1 ? "Thanush" : "Vyshnavi Rayapudi",
           role: targetRole,
           supabaseAccessToken: data.session.access_token,
+          supabaseRefreshToken: data.session.refresh_token,
         }
       },
     }),
@@ -178,6 +179,28 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.id = user.id
         token.role = (user as any).role || "student"
         token.supabaseAccessToken = (user as any).supabaseAccessToken || null
+        token.supabaseRefreshToken = (user as any).supabaseRefreshToken || null
+        token.expiresAt = Math.floor(Date.now() / 1000) + 3600
+      }
+
+      // Check if Supabase access token is close to expiring (e.g. within 5 minutes)
+      const nowInSeconds = Math.floor(Date.now() / 1000)
+      if (token.expiresAt && nowInSeconds > (token.expiresAt as number) - 300) {
+        if (token.supabaseRefreshToken) {
+          try {
+            console.log("Refreshing expired Supabase access token...")
+            const { data, error } = await supabase.auth.refreshSession({
+              refresh_token: token.supabaseRefreshToken as string
+            })
+            if (error) throw error
+            token.supabaseAccessToken = data.session?.access_token || null
+            token.supabaseRefreshToken = data.session?.refresh_token || null
+            token.expiresAt = Math.floor(Date.now() / 1000) + (data.session?.expires_in || 3600)
+            console.log("Supabase access token refreshed successfully.")
+          } catch (e) {
+            console.error("Failed to refresh Supabase access token:", (e as any).message || e)
+          }
+        }
       }
       return token
     },

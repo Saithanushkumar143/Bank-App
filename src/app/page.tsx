@@ -33,7 +33,11 @@ export default function RootPage() {
   useEffect(() => {
     if (session?.user) {
       const sessUser = session.user as any;
-      if (!currentUser || currentUser.email !== sessUser.email) {
+      if (
+        !currentUser || 
+        currentUser.email !== sessUser.email ||
+        currentUser.supabaseAccessToken !== sessUser.supabaseAccessToken
+      ) {
         setCurrentUser({
           id: sessUser.id || '',
           email: sessUser.email || '',

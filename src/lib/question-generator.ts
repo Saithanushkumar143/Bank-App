@@ -105,7 +105,8 @@ async function generateWithGroq(
   count: number,
   level: number
 ): Promise<GeneratedQuestion[]> {
-  const prompt = getGenerationPrompt(subject, topic, count, level);
+  const basePrompt = getGenerationPrompt(subject, topic, count, level);
+  const prompt = `${basePrompt}\n\nSince response_format is set to json_object, you must output a valid JSON object containing a single key "questions" whose value is the array of generated questions. Do not output a raw array; wrap it in this object structure.`;
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -129,12 +130,22 @@ async function generateWithGroq(
   const rawText = data.choices[0].message.content.trim();
   const cleanText = rawText.replace(/^```json/, '').replace(/```$/, '').trim();
   
-  // Groq might respond with { "questions": [...] }
   const parsed = JSON.parse(cleanText);
   if (Array.isArray(parsed)) {
     return parsed as GeneratedQuestion[];
-  } else if (parsed.questions && Array.isArray(parsed.questions)) {
-    return parsed.questions as GeneratedQuestion[];
+  }
+  if (parsed && typeof parsed === 'object') {
+    const possibleKeys = ['questions', 'data', 'mcqs', 'results', 'quiz'];
+    for (const key of possibleKeys) {
+      if (parsed[key] && Array.isArray(parsed[key])) {
+        return parsed[key] as GeneratedQuestion[];
+      }
+    }
+    for (const val of Object.values(parsed)) {
+      if (Array.isArray(val)) {
+        return val as GeneratedQuestion[];
+      }
+    }
   }
   throw new Error("Invalid format returned from Groq");
 }
